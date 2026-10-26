@@ -4,6 +4,9 @@ A macOS menu bar app for following [Codex Resets](https://codex-resets.com) anno
 
 Built in Rust with [Native Shell](https://nsh.dev) for the interface and AppKit for the menu bar and popover. This is an independent client; reset data is provided by Codex Resets.
 
+<img width="378" height="739" alt="image" src="https://github.com/user-attachments/assets/2fa605b5-0478-4dce-855b-e77453f458cb" />
+
+
 ## Features
 
 - **Reset statistics:** latest reset, total resets, average interval, and longest wait.
