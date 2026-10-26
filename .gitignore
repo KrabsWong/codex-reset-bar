@@ -1,0 +1,10 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Build output
+/dist
+/build
+
+# macOS
+.DS_Store
