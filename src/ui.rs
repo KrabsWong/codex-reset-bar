@@ -33,7 +33,8 @@ const PAGE: u32 = 30;
 const TICK: Duration = Duration::from_secs(15);
 const STALE: i64 = 60;
 
-/// Whether the panel is on screen: a hidden menu bar app does not poll.
+/// Panel visibility controls the detailed history refresh; status monitoring
+/// continues independently in the native host.
 static VISIBLE: AtomicBool = AtomicBool::new(false);
 static SHOW_FRAME: OnceLock<async_channel::Sender<()>> = OnceLock::new();
 
@@ -41,9 +42,10 @@ static OPEN: OnceLock<fn(&str)> = OnceLock::new();
 static CLOSE: OnceLock<fn()> = OnceLock::new();
 
 /// Tells the panel it is on screen (the host calls this as the popover
-/// opens and closes): while it is hidden, nothing is fetched.
+/// opens and closes). The lightweight background monitor remains active.
 pub fn set_visible(visible: bool) {
     VISIBLE.store(visible, Ordering::Relaxed);
+    crate::monitor::set_visible(visible);
     if visible {
         if let Some(sender) = SHOW_FRAME.get() {
             let _ = sender.try_send(());
@@ -105,11 +107,6 @@ pub fn App() -> impl IntoElement {
         let _ = sender.try_send(());
     }
     let _ = SHOW_FRAME.set(sender);
-    spawn(async move {
-        while receiver.recv().await.is_ok() {
-            request_animation_frame(|_| {});
-        }
-    });
     // What was read last time paints first: no empty panel, no waiting.
     let cached = cache::load();
     let now = format::now_epoch();
@@ -131,6 +128,15 @@ pub fn App() -> impl IntoElement {
         pulse: signal(0.85_f32),
         flash: signal(false),
     };
+
+    spawn(async move {
+        while receiver.recv().await.is_ok() {
+            request_animation_frame(|_| {});
+            // A hidden background check may be newer than the displayed cache.
+            // Opening the panel refreshes its full history immediately.
+            reload_all(state).await;
+        }
+    });
 
     // Read again when there was nothing to show, or the cache is a minute old.
     let fresh = cached.as_ref().is_some_and(|cache| {
@@ -192,6 +198,7 @@ pub fn App() -> impl IntoElement {
                     reload_all(state).await;
                     continue;
                 }
+                crate::monitor::displayed(&data);
                 state.status.set(Some(data));
                 state.updated_at.set(Some(format::now_epoch()));
                 remember(state);
@@ -270,9 +277,6 @@ fn header(state: State) -> impl IntoElement {
                         .on_press(|| open(api::SITE))
                         .child(
                             view()
-                                .tooltip(
-                                    tooltip().child(text("Data from Codex Resets · Open website")),
-                                )
                                 .child(
                                     text("Codex Resets")
                                         .text_size(px(14.0))
@@ -1113,6 +1117,7 @@ async fn reload_all(state: State) {
     let mut refreshed = true;
     match api::status().await {
         Ok(data) => {
+            crate::monitor::displayed(&data);
             state.status.set(Some(data));
             state.updated_at.set(Some(format::now_epoch()));
             state.error.set(None);

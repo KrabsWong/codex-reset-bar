@@ -1,77 +1,128 @@
 # Codex Resets Bar
 
-macOS 菜单栏应用，用于查看 [Codex Resets](https://codex-resets.com) 的重置记录。
-界面由 [Native Shell](https://nsh.dev) 的 Rust 组件绘制，AppKit 提供菜单栏图标和弹出面板。
+A macOS menu bar app for following [Codex Resets](https://codex-resets.com) announcements without keeping a browser tab open.
 
-## 功能
+Built in Rust with [Native Shell](https://nsh.dev) for the interface and AppKit for the menu bar and popover. This is an independent client; reset data is provided by Codex Resets.
 
-- 最近一次重置时间、累计次数、平均间隔和最长等待时间。
-- 近 20 周的活动日历：蓝色为 regular，橙色为 banked，灰色为无重置事件。
-- 可滚动的原文记录，最多显示三行，悬停查看全文，点击打开公告来源。
-- 仅展示接口明确提供的重置计划，不自行预测下次重置日期。
-- 英文界面、系统深浅色、手动刷新、本地缓存和来源署名。
-- 标题、头像和底部来源链接打开网站；介绍中的 @thsottiaux 打开其 X 页面。
+## Features
 
-## 构建与运行
+- **Reset statistics:** latest reset, total resets, average interval, and longest wait.
+- **Activity calendar:** 20 weeks of history, grouped by local date. Blue represents regular resets, orange represents banked resets, and gray represents days without reset events.
+- **Announcement history:** original messages, up to three lines per row, with the full text available on hover. Click a record to open its source when available.
+- **Announced schedules:** upcoming resets appear only when provided by the service. The app does not predict the next reset from historical intervals.
+- **Background monitoring:** checks status at launch and approximately every 60 seconds, even when the popover has never been opened.
+- **Native appearance:** English interface, system light and dark modes, local caching, and manual refresh.
 
-需要 macOS 14+、Xcode 命令行工具和 Rust 工具链。
+## Menu bar indicators
+
+The avatar displays a small colored dot when there is something to check:
+
+| Indicator | Meaning |
+| --- | --- |
+| Green | A new reset has not yet been viewed. Open the popover and let the latest record load to clear it. |
+| Orange | A reset has been announced and is still awaiting execution. Opening the popover does not clear it. |
+| No dot | No unread reset or pending announcement is known. |
+
+Green takes priority when both states apply. After viewing the new reset, an outstanding announcement can still show an orange dot. Hover over the menu bar icon for a text explanation.
+
+On a first launch without saved state, the first successful response establishes a baseline rather than flagging an old event as new. Viewed timestamps persist across restarts. Failed requests retain the last known state and are retried on the next polling cycle; indicators are not a guarantee of real-time delivery.
+
+## Install
+
+The current distribution is for **Apple Silicon Macs (arm64)** running **macOS 14 or later**.
+
+1. Extract the distribution ZIP.
+2. Move `Codex Resets.app` to Applications.
+3. Open the app and look for its avatar in the menu bar.
+
+The app does not appear in the Dock. Click the avatar to toggle the popover; press Escape or click outside to dismiss it. To quit, use macOS Activity Monitor. For automatic startup, add the app under **System Settings → General → Login Items**.
+
+Local packages use an ad-hoc signature and are not Developer ID signed or notarized.
+
+## Build from source
+
+Requirements: macOS 14+, Xcode Command Line Tools, and a Rust toolchain supporting edition 2024.
 
 ```sh
+# Run from source.
 cargo run
+
+# Build a release app bundle and open it.
 bash scripts/package.sh --run
 ```
 
-打包脚本生成 `dist/Codex Resets.app`，使用本地 ad-hoc 签名，不包含 Developer ID 签名或公证。
-构建架构取决于 Rust 目标；当前提供的分发包为 Apple Silicon（arm64）。
-应用不显示 Dock 图标。点击菜单栏头像展开或收起；按 Esc 或点击面板外可关闭面板。
-如需结束应用，可使用 macOS 活动监视器。
+The packaging script generates the icons, builds the release executable, assembles `dist/Codex Resets.app`, and applies an ad-hoc signature. The binary architecture follows the Rust build target; the script does not create a universal binary.
 
-生成可分发 ZIP：
+To create an Apple Silicon distribution archive after building on arm64:
 
 ```sh
-ditto -c -k --sequesterRsrc --keepParent 'dist/Codex Resets.app' dist/Codex-Resets-0.1.0-macOS-arm64.zip
+ditto -c -k --sequesterRsrc --keepParent \
+  'dist/Codex Resets.app' \
+  dist/Codex-Resets-0.1.0-macOS-arm64.zip
 ```
 
-## 数据
+## Data and storage
 
-数据来自 Codex Resets 的公开接口：
+The app reads the service's public endpoints:
 
-- `GET /api/v1/status`：最新重置、已宣布计划、观察状态及汇总统计。
-- `GET /api/v1/resets?limit=30&order=desc`：按游标分页读取记录。
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/status` | Latest reset, announced schedule, watch status, and summary statistics. |
+| `GET /api/v1/resets?limit=30&order=desc` | Cursor-paginated announcement history. |
 
-刷新时加载完整历史后才计算 Longest wait：按时间排序，取相邻事件之间的最大间隔。
-历史不完整或日期无效时不展示部分数据算出的最大值。日历按本地日期分组。
+**Longest wait** is calculated from the complete history as the largest interval between consecutive reset timestamps. Partial history or invalid dates do not produce a misleading all-time value. Calendar dates use the Mac's local time zone.
 
-缓存位于 `~/Library/Application Support/CodexResets/cache.json`，启动时先展示缓存，再按需刷新。
-网络失败保留已读取的数据。打开期间定期检查状态，面板关闭时不启动周期性刷新。
-请求使用 `Cache-Control: no-cache` 重新校验服务端数据。
+Files are stored in `~/Library/Application Support/CodexResets/`:
 
-网站头像用于应用图标、菜单栏和面板标题，原始来源见 [resources/README.md](resources/README.md)。
-本项目是独立客户端，数据服务和头像归其各自提供方。
+- `cache.json`: previously fetched statistics and history, displayed while fresh data loads.
+- `seen.json`: the last viewed reset timestamp used by the menu bar indicator.
 
-## 开发验证
+Opening the popover refreshes its detailed data. Background status checks use the system's `NSURLSession` and bypass local HTTP caches; panel requests use `Cache-Control: no-cache`. Network failures preserve available data.
+
+## Development and verification
 
 ```sh
+# Unit and local HTTP integration tests.
 cargo test
+
+# Run the isolated, real 60-second background polling test.
+cargo test background_poll_without_ui -- --ignored --test-threads=1
+
+# Render the panel for visual inspection.
 cargo run -- --snapshot /tmp/panel.png 5
 cargo run -- --snapshot /tmp/dark.png 5 --dark
+
+# Check popover placement and text restoration across repeated opens.
 cargo run -- --self-test --redraw-test
+
+# Open the popover immediately on launch.
 CODEX_RESET_SHOW_ON_LAUNCH=1 cargo run
 ```
 
-可选环境变量：
+Optional environment variables:
 
-- `CODEX_RESET_API_BASE`：测试服务地址。
-- `CODEX_RESET_CACHE_PATH`：隔离测试缓存路径。
-- `CODEX_RESET_TRACE=1`：将刷新日志写入 `/tmp/codex-reset-trace.log`。
+| Variable | Purpose |
+| --- | --- |
+| `CODEX_RESET_API_BASE` | Override the API origin for a local test server. |
+| `CODEX_RESET_CACHE_PATH` | Isolate the panel cache; the viewed timestamp uses a sibling `.seen.json` file. |
+| `CODEX_RESET_TRACE=1` | Write refresh traces to `/tmp/codex-reset-trace.log` and menu badge changes to standard error. |
 
-## 代码结构
+## Project structure
 
-- `src/main.rs`：AppKit 宿主、弹窗定位、重绘和运行时自检。
-- `src/ui.rs`：NSH 组件、样式、刷新与分页。
-- `src/api.rs` / `src/model.rs`：接口、数据类型和最长等待统计。
-- `src/calendar.rs` / `src/format.rs`：活动日历、日期与数字格式。
-- `src/cache.rs`：缓存读写。
-- `scripts/package.sh` / `scripts/make-icon.swift`：构建应用包与图标。
+| Path | Responsibility |
+| --- | --- |
+| `src/main.rs` | AppKit host, menu bar icon, popover placement, and runtime checks. |
+| `src/ui.rs` | NSH components, styles, refresh, and pagination. |
+| `src/monitor.rs` | Background status polling, unread state, and badge selection. |
+| `src/api.rs` / `src/model.rs` | API requests, response types, and longest-wait calculation. |
+| `src/calendar.rs` / `src/format.rs` | Activity calendar, date handling, and formatting. |
+| `src/cache.rs` | Panel cache persistence. |
+| `scripts/package.sh` / `scripts/make-icon.swift` | App packaging and icon generation. |
 
-源码许可见 [LICENSE](LICENSE)。
+## Credits and license
+
+Data from [Codex Resets](https://codex-resets.com), which follows [@thsottiaux](https://x.com/thsottiaux) for reset announcements. The app links back to the service from its title and footer.
+
+The website's avatar is used for the app icon, menu bar icon, and popover header. Its source is documented in [resources/README.md](resources/README.md). Third-party data and imagery remain the property of their respective owners.
+
+See [LICENSE](LICENSE) for the source code license.

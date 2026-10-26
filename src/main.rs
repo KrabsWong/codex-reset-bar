@@ -83,6 +83,7 @@ fn main() {
     codex_reset::set_close_handler(close_panel);
 
     MENU.with(|slot| *slot.borrow_mut() = Some(menu_bar(mtm)));
+    codex_reset::monitor::start(update_badge);
 
     // `CODEX_RESET_SHOW_ON_LAUNCH=1` opens the panel with the app, for a
     // screenshot or a demo; a normal launch waits for a click.
@@ -153,6 +154,33 @@ fn menu_bar(mtm: MainThreadMarker) -> Menu {
         _view: view,
         loaded: Cell::new(false),
     }
+}
+
+/// Keep image updates on AppKit's main thread; badge variants have identical sizes.
+fn update_badge(badge: codex_reset::monitor::Badge) {
+    dispatch2::DispatchQueue::main().exec_async(move || {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        MENU.with(|slot| {
+            let slot = slot.borrow();
+            let Some(menu) = slot.as_ref() else { return };
+            let Some(button) = menu.item.button(mtm) else { return };
+            use codex_reset::monitor::Badge;
+            let (bytes, hint): (&[u8], &str) = match badge {
+                Badge::None => (include_bytes!("../resources/status-logo.png"), "Codex Resets"),
+                Badge::NewReset => (include_bytes!("../resources/status-logo-new.png"), "New Codex reset · Open to view"),
+                Badge::Scheduled => (include_bytes!("../resources/status-logo-scheduled.png"), "Codex reset announced · Awaiting reset"),
+            };
+            if let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(bytes)) {
+                image.setSize(NSSize::new(18.0, 18.0));
+                image.setTemplate(false);
+                button.setImage(Some(&image));
+            }
+            button.setToolTip(Some(&NSString::from_str(hint)));
+            if std::env::var_os("CODEX_RESET_TRACE").is_some() {
+                eprintln!("Menu badge: {badge:?}");
+            }
+        });
+    });
 }
 
 /// Shows the panel under the status item, or hides it when it is open.

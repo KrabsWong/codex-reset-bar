@@ -28,6 +28,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 nsh-platform-macos = { version = "0.2.0", default-features = false }
 # AppKit from the engine thread: quit and close hop to the main queue.
 dispatch2 = "0.3.1"
+block2 = "0.6.2"
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CALayer"] }
 # The classes the host adds on top of what NSH's backend enables: the status
 # item, its popover and the controller that answers the click.
@@ -63,6 +64,11 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
   "NSBundle",
   "NSCoder",
   "NSData",
+  "NSError",
+  "NSURLSession",
+  "NSURLRequest",
+  "NSURLResponse",
+  "block2",
   "NSDate",
   "NSDictionary",
   "NSRunLoop",
