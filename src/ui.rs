@@ -451,7 +451,6 @@ fn latest_card(state: State) -> impl IntoElement {
     view()
         .flex_col()
         .gap(px(5.0))
-        .pb(px(12.0))
         .child(
             view()
                 .flex_row()
@@ -602,7 +601,7 @@ fn stats_row(state: State) -> impl IntoElement {
     view()
         .flex_row()
         .gap(px(12.0))
-        .py(px(8.0))
+        .py(px(4.0))
         .child(
             view()
                 .flex_col()
