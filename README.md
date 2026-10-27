@@ -14,7 +14,7 @@ Built in Rust with [Native Shell](https://nsh.dev) for the interface and AppKit 
 - **Announcement history:** original messages, up to three lines per row, with the full text available on hover. Click a record to open its source when available.
 - **Announced schedules:** upcoming resets appear only when provided by the service. The app does not predict the next reset from historical intervals.
 - **Background monitoring:** checks status at launch and approximately every 60 seconds, even when the popover has never been opened.
-- **Native appearance:** English interface, system light and dark modes, local caching, and manual refresh.
+- **Native appearance:** English interface, system light and dark modes, local caching, and manual refresh with a spinning indicator while requests are in progress.
 
 ## Menu bar indicators
 
@@ -26,7 +26,7 @@ The avatar displays a small colored dot when there is something to check:
 | Orange | A reset has been announced and is still awaiting execution. Opening the popover does not clear it. |
 | No dot | No unread reset or pending announcement is known. |
 
-Green takes priority when both states apply. After viewing the new reset, an outstanding announcement can still show an orange dot. Hover over the menu bar icon for a text explanation.
+Green takes priority when both states apply. After viewing the new reset, an outstanding announcement can still show an orange dot.
 
 On a first launch without saved state, the first successful response establishes a baseline rather than flagging an old event as new. Viewed timestamps persist across restarts. Failed requests retain the last known state and are retried on the next polling cycle; indicators are not a guarantee of real-time delivery.
 
@@ -38,7 +38,9 @@ The current distribution is for **Apple Silicon Macs (arm64)** running **macOS 1
 2. Move `Codex Resets.app` to Applications.
 3. Open the app and look for its avatar in the menu bar.
 
-The app does not appear in the Dock. Click the avatar to toggle the popover; press Escape or click outside to dismiss it. To quit, use macOS Activity Monitor. For automatic startup, add the app under **System Settings → General → Login Items**.
+The app does not appear in the Dock. Click the avatar to toggle the popover; press Escape or click outside to dismiss it. Right-click (or Control-click) the avatar to see the app version and automatic refresh interval, or choose **Quit Codex Resets**. For automatic startup, add the app under **System Settings → General → Login Items**.
+
+When upgrading, quit the running app before replacing it in Applications. Version 0.1.0 has no Quit menu: open macOS Activity Monitor, find `CodexResets`, and quit that process first. Then replace the app and launch the new version.
 
 Local packages use an ad-hoc signature and are not Developer ID signed or notarized.
 
@@ -61,7 +63,7 @@ To create an Apple Silicon distribution archive after building on arm64:
 ```sh
 ditto -c -k --sequesterRsrc --keepParent \
   'dist/Codex Resets.app' \
-  dist/Codex-Resets-0.1.0-macOS-arm64.zip
+  dist/Codex-Resets-0.1.2-macOS-arm64.zip
 ```
 
 ## Data and storage
@@ -80,7 +82,7 @@ Files are stored in `~/Library/Application Support/CodexResets/`:
 - `cache.json`: previously fetched statistics and history, displayed while fresh data loads.
 - `seen.json`: the last viewed reset timestamp used by the menu bar indicator.
 
-Opening the popover refreshes its detailed data. Background status checks use the system's `NSURLSession` and bypass local HTTP caches; panel requests use `Cache-Control: no-cache`. Network failures preserve available data.
+Opening the popover refreshes its detailed data. Existing history stays visible until all pages have loaded; an unchanged result does not replace the list, and a failed page leaves the previous history intact. Background status checks use the system's `NSURLSession` and bypass local HTTP caches; panel requests use `Cache-Control: no-cache`. Network failures preserve available data.
 
 ## Development and verification
 

@@ -19,6 +19,7 @@ use objc2::{
 use objc2_app_kit::{
     NSAppearance, NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy,
     NSBackingStoreType, NSBitmapImageFileType, NSImage, NSPopover, NSPopoverBehavior,
+    NSEventMask, NSEventType, NSEventModifierFlags, NSMenu, NSMenuItem,
     NSPopoverDelegate, NSStatusBar, NSStatusItem, NSVariableStatusItemLength, NSViewController,
     NSView, NSWindow, NSWindowStyleMask, NSWorkspace,
 };
@@ -129,7 +130,6 @@ fn menu_bar(mtm: MainThreadMarker) -> Menu {
     let bar = NSStatusBar::systemStatusBar();
     let item = bar.statusItemWithLength(NSVariableStatusItemLength);
     if let Some(button) = item.button(mtm) {
-        button.setToolTip(Some(ns_string!("Codex Resets")));
         match NSImage::initWithData(
             NSImage::alloc(),
             &NSData::with_bytes(include_bytes!("../resources/status-logo.png")),
@@ -141,6 +141,7 @@ fn menu_bar(mtm: MainThreadMarker) -> Menu {
             }
             None => button.setTitle(ns_string!("CR")),
         }
+        button.sendActionOn(NSEventMask::LeftMouseUp | NSEventMask::RightMouseUp);
         unsafe {
             button.setTarget(Some(&target));
             button.setAction(Some(sel!(togglePanel:)));
@@ -156,6 +157,52 @@ fn menu_bar(mtm: MainThreadMarker) -> Menu {
     }
 }
 
+fn is_context_click(kind: NSEventType, modifiers: NSEventModifierFlags) -> bool {
+    kind == NSEventType::RightMouseUp
+        || (kind == NSEventType::LeftMouseUp && modifiers.contains(NSEventModifierFlags::Control))
+}
+
+/// A native secondary-click menu; the primary click continues to use the popover.
+fn show_context_menu(target: &Controller) {
+    let mtm = target.mtm();
+    // Menu tracking runs a nested event loop. Do not hold a MENU borrow across it.
+    let Some((button, popover)) = MENU.with(|slot| {
+        let slot = slot.borrow();
+        let host = slot.as_ref()?;
+        Some((host.item.button(mtm)?, host.popover.clone()))
+    }) else { return };
+    unsafe { popover.performClose(None) };
+
+    let menu = NSMenu::new(mtm);
+    menu.setAutoenablesItems(false);
+    for label in [
+        format!("Codex Resets {}", env!("CARGO_PKG_VERSION")),
+        "Auto-refresh: every 60 seconds".to_owned(),
+    ] {
+        let info = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm), &NSString::from_str(&label), None, ns_string!(""),
+            )
+        };
+        info.setEnabled(false);
+        menu.addItem(&info);
+    }
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
+    // The controller implements quitApp: and lives for the entire status item's lifetime.
+    let quit = unsafe {
+        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm), ns_string!("Quit Codex Resets"),
+            Some(sel!(quitApp:)), ns_string!("q"),
+        );
+        item.setTarget(Some(target));
+        item
+    };
+    menu.addItem(&quit);
+    menu.popUpMenuPositioningItem_atLocation_inView(
+        None, NSPoint::new(0.0, 0.0), Some(&button),
+    );
+}
+
 /// Keep image updates on AppKit's main thread; badge variants have identical sizes.
 fn update_badge(badge: codex_reset::monitor::Badge) {
     dispatch2::DispatchQueue::main().exec_async(move || {
@@ -165,17 +212,16 @@ fn update_badge(badge: codex_reset::monitor::Badge) {
             let Some(menu) = slot.as_ref() else { return };
             let Some(button) = menu.item.button(mtm) else { return };
             use codex_reset::monitor::Badge;
-            let (bytes, hint): (&[u8], &str) = match badge {
-                Badge::None => (include_bytes!("../resources/status-logo.png"), "Codex Resets"),
-                Badge::NewReset => (include_bytes!("../resources/status-logo-new.png"), "New Codex reset · Open to view"),
-                Badge::Scheduled => (include_bytes!("../resources/status-logo-scheduled.png"), "Codex reset announced · Awaiting reset"),
+            let bytes: &[u8] = match badge {
+                Badge::None => include_bytes!("../resources/status-logo.png"),
+                Badge::NewReset => include_bytes!("../resources/status-logo-new.png"),
+                Badge::Scheduled => include_bytes!("../resources/status-logo-scheduled.png"),
             };
             if let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(bytes)) {
                 image.setSize(NSSize::new(18.0, 18.0));
                 image.setTemplate(false);
                 button.setImage(Some(&image));
             }
-            button.setToolTip(Some(&NSString::from_str(hint)));
             if std::env::var_os("CODEX_RESET_TRACE").is_some() {
                 eprintln!("Menu badge: {badge:?}");
             }
@@ -577,7 +623,17 @@ define_class!(
     impl Controller {
         #[unsafe(method(togglePanel:))]
         fn toggle_panel_action(&self, _sender: Option<&AnyObject>) {
-            toggle_panel();
+            let event = NSApplication::sharedApplication(self.mtm()).currentEvent();
+            if event.is_some_and(|event| is_context_click(event.r#type(), event.modifierFlags())) {
+                show_context_menu(self);
+            } else {
+                toggle_panel();
+            }
+        }
+
+        #[unsafe(method(quitApp:))]
+        fn quit_action(&self, _sender: Option<&AnyObject>) {
+            quit_now();
         }
     }
 
@@ -598,6 +654,14 @@ define_class!(
 #[cfg(test)]
 mod placement_tests {
     use super::*;
+
+    #[test]
+    fn secondary_click_opens_menu_without_changing_primary_click() {
+        assert!(is_context_click(NSEventType::RightMouseUp, NSEventModifierFlags::empty()));
+        assert!(is_context_click(NSEventType::LeftMouseUp, NSEventModifierFlags::Control));
+        assert!(!is_context_click(NSEventType::LeftMouseUp, NSEventModifierFlags::empty()));
+        assert!(!is_context_click(NSEventType::LeftMouseUp, NSEventModifierFlags::Command));
+    }
 
     #[test]
     fn menu_aligns_to_button_and_stays_on_its_screen() {

@@ -309,7 +309,15 @@ fn header(state: State) -> impl IntoElement {
                 .child(
                     view()
                         .tooltip(tooltip().child(text("Refresh")))
-                        .child(text("↻").text_size(px(22.0)).text_color(blue)),
+                        .child(
+                            view()
+                                .size(px(26.0))
+                                .items_center()
+                                .justify_center()
+                                .origin_center()
+                                .style_when(move || state.busy.get(), |style| style.animate_spin())
+                                .child(text("↻").text_size(px(22.0)).text_color(blue)),
+                        ),
                 ),
         )
 }
@@ -1128,35 +1136,18 @@ async fn reload_all(state: State) {
         }
     }
 
-    match api::resets(PAGE, None).await {
-        Ok(page) => {
-            state.history.set(page.data);
-            state.has_more.set(page.pagination.has_more);
-            state.cursor.set(page.pagination.next_cursor);
-            state.error.set(None);
-            // Longest wait is an all-time statistic: load every page before
-            // publishing it, rather than using only the calendar's date range.
-            while state.has_more.get() {
-                let Some(cursor) = state.cursor.get() else {
-                    break;
-                };
-                match api::resets(PAGE, Some(&cursor)).await {
-                    Ok(page) => {
-                        let mut rows = state.history.get();
-                        rows.extend(page.data);
-                        state.history.set(rows);
-                        state.has_more.set(page.pagination.has_more);
-                        state.cursor.set(page.pagination.next_cursor);
-                        if state.cursor.get().as_deref() == Some(cursor.as_str()) {
-                            break;
-                        }
-                    }
-                    Err(message) => {
-                        remember_error(state, message);
-                        refreshed = false;
-                        break;
-                    }
-                }
+    // Keep the displayed snapshot intact while all pages are fetched. Publishing
+    // the first page used to erase older calendar cells on every panel open.
+    match fetch_history().await {
+        Ok(rows) => {
+            if state.history.get() != rows {
+                state.history.set(rows);
+            }
+            if state.has_more.get() {
+                state.has_more.set(false);
+            }
+            if state.cursor.get().is_some() {
+                state.cursor.set(None);
             }
         }
         Err(message) => {
@@ -1177,6 +1168,33 @@ async fn reload_all(state: State) {
     }
     state.busy.set(false);
     trace("reload: done");
+}
+
+/// Fetch a complete replacement off-screen; any failed page leaves the current
+/// history (and its pagination metadata) untouched.
+async fn fetch_history() -> Result<Vec<Reset>, String> {
+    collect_history(|cursor| async move { api::resets(PAGE, cursor.as_deref()).await }).await
+}
+
+async fn collect_history<F, Fut>(mut fetch_page: F) -> Result<Vec<Reset>, String>
+where
+    F: FnMut(Option<String>) -> Fut,
+    Fut: std::future::Future<Output = Result<ResetPage, String>>,
+{
+    let mut rows = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = fetch_page(cursor.clone()).await?;
+        rows.extend(page.data);
+        if !page.pagination.has_more {
+            return Ok(rows);
+        }
+        let next = page.pagination.next_cursor;
+        if next.is_none() || next == cursor {
+            return Err("Incomplete history: pagination did not advance".to_owned());
+        }
+        cursor = next;
+    }
 }
 
 /// The header says "Updated" for a moment, in the accent color.
@@ -1222,4 +1240,52 @@ fn remember(state: State) {
         cursor: state.cursor.get(),
         has_more: state.has_more.get(),
     });
+}
+
+#[cfg(test)]
+mod refresh_tests {
+    use super::*;
+    use std::future::{Future, ready};
+    use std::task::{Context, Poll, Waker};
+
+    fn page(id: &str, more: bool) -> ResetPage {
+        ResetPage {
+            data: vec![Reset {
+                id: id.into(), reset_type: ResetType::Regular,
+                announced_at: "2026-10-26T07:00:00Z".into(),
+                text: id.into(), source: None,
+            }],
+            pagination: Pagination {
+                has_more: more, next_cursor: more.then(|| id.into()),
+            },
+            meta: None,
+        }
+    }
+
+    fn run(pages: Vec<Result<ResetPage, String>>) -> Result<Vec<Reset>, String> {
+        let mut pages = pages.into_iter();
+        let mut task = std::pin::pin!(collect_history(|_| ready(pages.next().unwrap())));
+        match task.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(result) => result,
+            Poll::Pending => panic!("fixture pages are immediately ready"),
+        }
+    }
+
+    #[test]
+    fn refresh_returns_complete_history_or_error_never_first_page_only() {
+        let first = page("new", true);
+        let last = page("old", false);
+        let mut expected = first.data.clone();
+        expected.extend(last.data.clone());
+        assert_eq!(run(vec![Ok(first.clone()), Ok(last)]).unwrap(), expected);
+        assert!(run(vec![Ok(first), Err("offline".into())]).is_err());
+    }
+
+    #[test]
+    fn incomplete_pagination_cannot_replace_displayed_history() {
+        assert!(run(vec![Ok(page("same", true)), Ok(page("same", true))]).is_err());
+        let mut missing_cursor = page("new", true);
+        missing_cursor.pagination.next_cursor = None;
+        assert!(run(vec![Ok(missing_cursor)]).is_err());
+    }
 }
