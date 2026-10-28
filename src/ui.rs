@@ -37,7 +37,7 @@ const STALE: i64 = 60;
 /// continues independently in the native host.
 static VISIBLE: AtomicBool = AtomicBool::new(false);
 static SETTINGS_EVENTS: OnceLock<async_channel::Sender<()>> = OnceLock::new();
-static SHOW_FRAME: OnceLock<async_channel::Sender<()>> = OnceLock::new();
+static SHOW_FRAME: OnceLock<async_channel::Sender<Option<i64>>> = OnceLock::new();
 
 static OPEN: OnceLock<fn(&str)> = OnceLock::new();
 static CLOSE: OnceLock<fn()> = OnceLock::new();
@@ -59,11 +59,12 @@ pub fn refresh_language() {
 /// Tells the panel it is on screen (the host calls this as the popover
 /// opens and closes). The lightweight background monitor remains active.
 pub fn set_visible(visible: bool) {
+    let seen = crate::monitor::seen_at();
     VISIBLE.store(visible, Ordering::Relaxed);
     crate::monitor::set_visible(visible);
     if visible {
         if let Some(sender) = SHOW_FRAME.get() {
-            let _ = sender.try_send(());
+            let _ = sender.try_send(seen);
         }
     }
 }
@@ -98,6 +99,8 @@ fn open(url: impl Into<String>) {
 #[derive(Clone, Copy)]
 struct State {
     status: Signal<Option<StatusData>>,
+    // Preserve the pre-open acknowledgment while this panel is being viewed.
+    unread_since: Signal<Option<i64>>,
     history: Signal<Vec<Reset>>,
     cursor: Signal<Option<String>>,
     has_more: Signal<bool>,
@@ -121,7 +124,7 @@ pub fn App() -> impl IntoElement {
     // a frame even when cached data has not changed, so deferred draws run.
     let (sender, receiver) = async_channel::bounded(1);
     if VISIBLE.load(Ordering::Relaxed) {
-        let _ = sender.try_send(());
+        let _ = sender.try_send(crate::monitor::seen_at());
     }
     let _ = SHOW_FRAME.set(sender);
     // What was read last time paints first: no empty panel, no waiting.
@@ -131,6 +134,7 @@ pub fn App() -> impl IntoElement {
     let now = format::now_epoch();
     let state = State {
         status: signal(cached.as_ref().map(|cache| cache.status.clone())),
+        unread_since: signal(crate::monitor::seen_at()),
         history: signal(
             cached
                 .as_ref()
@@ -164,11 +168,17 @@ pub fn App() -> impl IntoElement {
     });
 
     spawn(async move {
-        while receiver.recv().await.is_ok() {
+        while let Ok(seen) = receiver.recv().await {
+            state.unread_since.set(seen);
             request_animation_frame(|_| {});
+            // The cached record is already visible, even if refreshing fails.
+            if let Some(data) = state.status.get() {
+                crate::monitor::displayed(&data);
+            }
             // A hidden background check may be newer than the displayed cache.
             // Opening the panel refreshes its full history immediately.
-            reload_all(state).await;
+            // Keep open events responsive while a slow refresh is in flight.
+            spawn(reload_all(state));
         }
     });
 
@@ -462,7 +472,8 @@ fn failure_view() -> impl IntoElement {
         .child(
             text(move || tr("Unable to load data", "暂时无法加载数据"))
                 .text_size(px(13.0))
-                .font_weight(FontWeight::SEMIBOLD),
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(|| AdaptiveColor { light: rgb(0x991b1b).into(), dark: rgb(0xfca5a5).into() }),
         )
         .child(
             text(move || tr("Check your connection, then click refresh at the top.", "请检查网络连接，再点击顶部刷新。"))
@@ -470,6 +481,26 @@ fn failure_view() -> impl IntoElement {
                 .text_color(move || theme().muted_foreground)
                 .number_of_lines(2),
         )
+}
+
+fn unread_background() -> AdaptiveColor {
+    AdaptiveColor { light: rgb(0xdcfce7).into(), dark: rgb(0x123322).into() }
+}
+
+fn unread_foreground() -> AdaptiveColor {
+    AdaptiveColor { light: rgb(0x166534).into(), dark: rgb(0x86efac).into() }
+}
+
+fn in_unread_range(seen: Option<i64>, at: Option<i64>, latest: Option<i64>) -> bool {
+    matches!((seen, at, latest), (Some(seen), Some(at), Some(latest)) if at > seen && at <= latest)
+}
+
+fn unread_record(state: State, reset: &Reset) -> bool {
+    in_unread_range(
+        state.unread_since.get(),
+        format::parse(&reset.announced_at),
+        latest(state).and_then(|reset| format::parse(&reset.announced_at)),
+    )
 }
 
 fn latest_card(state: State) -> impl IntoElement {
@@ -484,6 +515,7 @@ fn latest_card(state: State) -> impl IntoElement {
                 .child(
                     text(move || tr("Latest reset", "最近一次重置"))
                         .text_size(px(14.0))
+                        .text_color(move || theme().foreground)
                         .font_weight(FontWeight::MEDIUM),
                 )
                 .child(view().flex_1())
@@ -496,7 +528,7 @@ fn latest_card(state: State) -> impl IntoElement {
                     })
                     .text_size(px(14.0))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(move || reset_color(false)),
+                    .text_color(move || theme().foreground),
                 ),
         )
         .child(
@@ -520,12 +552,25 @@ fn next_card(state: State) -> impl IntoElement {
 }
 
 fn announced_next(state: State) -> impl IntoElement {
+    let foreground = AdaptiveColor {
+        light: rgb(0x92400e).into(),
+        dark: rgb(0xffb35c).into(),
+    };
     button()
         .flex_col()
         .gap(px(5.0))
-        .rounded(px(4.0))
+        .px(px(10.0))
+        .py(px(8.0))
+        .rounded(px(7.0))
+        .bg(|| AdaptiveColor {
+            light: rgb(0xffedcc).into(),
+            dark: rgb(0x452508).into(),
+        })
         .accessibility_label(move || Some(tr("Open scheduled reset announcement", "打开预定重置公告").into()))
-        .hover(|style| style.bg(theme().accent))
+        .hover(|style| style.bg(AdaptiveColor {
+            light: rgb(0xffdfaa).into(),
+            dark: rgb(0x59320d).into(),
+        }))
         .on_press(move || {
             if let Some(url) = state
                 .status
@@ -544,6 +589,7 @@ fn announced_next(state: State) -> impl IntoElement {
                 .child(
                     text(move || tr("Next reset", "下次重置"))
                         .text_size(px(13.0))
+                        .text_color(move || foreground)
                         .font_weight(FontWeight::MEDIUM),
                 )
                 .child(view().flex_1())
@@ -554,7 +600,7 @@ fn announced_next(state: State) -> impl IntoElement {
                             .unwrap_or_default()
                     })
                     .text_size(px(11.0))
-                    .text_color(blue),
+                    .text_color(move || foreground),
                 ),
         )
         .child(
@@ -564,7 +610,7 @@ fn announced_next(state: State) -> impl IntoElement {
                     .unwrap_or_default()
             })
             .text_size(px(11.0))
-            .text_color(blue),
+            .text_color(move || foreground),
         )
 }
 
@@ -868,16 +914,16 @@ fn error_banner(state: State) -> impl IntoElement {
             .mb(px(12.0))
             .px(px(10.0)).py(px(8.0)).rounded(px(7.0))
             .bg(|| AdaptiveColor {
-                light: rgb(0xffedcc).into(),
-                dark: rgb(0x452508).into(),
+                light: rgb(0xfee2e2).into(),
+                dark: rgb(0x450a0a).into(),
             })
             .child(text(move || tr(
                 "Some data could not be updated. Click refresh at the top to try again.",
                 "部分数据暂时无法更新，点击顶部刷新即可重试。",
             )).text_size(px(11.0))
                 .text_color(|| AdaptiveColor {
-                    light: rgb(0xb94000).into(),
-                    dark: rgb(0xffb35c).into(),
+                    light: rgb(0x991b1b).into(),
+                    dark: rgb(0xfca5a5).into(),
                 }).number_of_lines(2)),
     )
 }
@@ -916,7 +962,7 @@ fn history_section(state: State) -> impl IntoElement {
                     .child(each(
                         state.history,
                         |reset| reset.id.clone(),
-                        move |row, index| history_row(row, index),
+                        move |row, index| history_row(state, row, index),
                     ))
                     .child(when(
                         move || state.history.get().is_empty(),
@@ -959,9 +1005,11 @@ fn load_more(state: State) -> impl IntoElement {
 }
 
 /// A compact history row; dividers appear only between announcements.
-fn history_row(row: ReadSignal<Reset>, index: ReadSignal<usize>) -> impl IntoElement {
+fn history_row(state: State, row: ReadSignal<Reset>, index: ReadSignal<usize>) -> impl IntoElement {
     button()
         .flex_col()
+        .bg(move || if unread_record(state, &row.get()) { unread_background() } else { AdaptiveColor::TRANSPARENT })
+        .rounded(move || px(if unread_record(state, &row.get()) { 7.0 } else { 0.0 }))
         .min_h(px(64.0))
         .flex_none()
         .px(px(8.0))
@@ -969,11 +1017,11 @@ fn history_row(row: ReadSignal<Reset>, index: ReadSignal<usize>) -> impl IntoEle
         .gap(px(4.0))
         .border_t(move || px(if index.get() == 0 { 0.0 } else { 1.0 }))
         .border_color(move || tint(blue(), 0.12, 0.18))
-        .hover(|style| {
-            style.bg(AdaptiveColor {
+        .hover(move |style| {
+            style.bg(if unread_record(state, &row.get()) { tint(unread_foreground(), 0.2, 0.25) } else { AdaptiveColor {
                 light: rgb(0xe2ebff).into(),
                 dark: rgb(0x243a60).into(),
-            })
+            } })
         })
         .on_press(move || {
             if let Some(url) = row.get().url().map(str::to_owned) {
@@ -994,7 +1042,7 @@ fn history_row(row: ReadSignal<Reset>, index: ReadSignal<usize>) -> impl IntoEle
                             .unwrap_or_default()
                     })
                     .text_size(px(11.0))
-                    .text_color(move || theme().muted_foreground),
+                    .text_color(move || if unread_record(state, &row.get()) { unread_foreground() } else { theme().muted_foreground }),
                 )
                 .child(view().flex_1())
                 .child(
@@ -1009,7 +1057,7 @@ fn history_row(row: ReadSignal<Reset>, index: ReadSignal<usize>) -> impl IntoEle
                         }
                     })
                     .text_size(px(10.0))
-                    .text_color(move || theme().muted_foreground),
+                    .text_color(move || if unread_record(state, &row.get()) { unread_foreground() } else { theme().muted_foreground }),
                 ),
         )
         .child(
@@ -1032,6 +1080,7 @@ fn history_row(row: ReadSignal<Reset>, index: ReadSignal<usize>) -> impl IntoEle
                 .child(
                     text(move || row.get().text.trim().to_owned())
                     .text_size(px(12.0))
+                    .text_color(move || if unread_record(state, &row.get()) { unread_foreground() } else { theme().foreground })
                     .number_of_lines(3),
                 ),
         )
@@ -1261,6 +1310,19 @@ mod refresh_tests {
     use super::*;
     use std::future::{Future, ready};
     use std::task::{Context, Poll, Waker};
+
+    #[test]
+    fn unread_highlights_only_records_between_seen_and_latest_reset() {
+        assert!(!in_unread_range(Some(10), Some(10), Some(30)));
+        assert!(in_unread_range(Some(10), Some(20), Some(30)));
+        assert!(in_unread_range(Some(10), Some(30), Some(30)));
+        assert!(!in_unread_range(Some(10), Some(40), Some(30)));
+        assert!(!in_unread_range(None, Some(20), Some(30)));
+        assert!(!in_unread_range(Some(10), None, Some(30)));
+        assert!(!in_unread_range(Some(10), Some(20), None));
+        // Reopening after acknowledgment clears the highlight.
+        assert!(!in_unread_range(Some(30), Some(30), Some(30)));
+    }
 
     fn page(id: &str, more: bool) -> ResetPage {
         ResetPage {

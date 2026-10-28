@@ -27,6 +27,8 @@ The avatar displays a small colored dot when there is something to check:
 | Orange | A reset has been announced and is still awaiting execution. Opening the popover does not clear it. |
 | No dot | No unread reset or pending announcement is known. |
 
+The panel uses orange for pending resets, green for unread history rows, and red for refresh errors. Green history highlights remain during the current viewing session and clear when the panel is reopened.
+
 Green takes priority when both states apply. After viewing the new reset, an outstanding announcement can still show an orange dot.
 
 On a first launch without saved state, the first successful response establishes a baseline rather than flagging an old event as new. Viewed timestamps persist across restarts. Failed requests retain the last known state and are retried on the next polling cycle; indicators are not a guarantee of real-time delivery.
@@ -64,7 +66,7 @@ To create an Apple Silicon distribution archive after building on arm64:
 ```sh
 ditto -c -k --sequesterRsrc --keepParent \
   'dist/Codex Resets.app' \
-  dist/Codex-Resets-0.1.3-macOS-arm64.zip
+  dist/Codex-Resets-0.1.4-macOS-arm64.zip
 ```
 
 ## Data and storage

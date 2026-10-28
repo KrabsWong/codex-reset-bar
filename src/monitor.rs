@@ -120,6 +120,10 @@ pub(crate) fn displayed(data: &StatusData) {
     update(|tracker| tracker.displayed(data));
 }
 
+pub(crate) fn seen_at() -> Option<i64> {
+    TRACKER.get().and_then(|tracker| tracker.lock().unwrap().seen)
+}
+
 pub fn set_visible(visible: bool) {
     update(|tracker| {
         tracker.visible = visible;
@@ -258,6 +262,29 @@ mod tests {
         ));
         assert_eq!(tracker.badge(), Badge::None);
     }
+    #[test]
+    fn opening_cached_record_clears_unread_but_preserves_pending_reset() {
+        let old = status("2026-10-25T00:00:00Z", None);
+        let cached = status(
+            "2026-10-26T07:00:00Z",
+            Some("2026-10-28T07:00:00Z"),
+        );
+        let mut tracker = Tracker::default();
+        tracker.observe(&old);
+        tracker.observe(&cached);
+        tracker.displayed(&cached);
+        assert_eq!(tracker.badge(), Badge::NewReset);
+
+        tracker.visible = true;
+        // Opening acknowledges the existing panel data without a network response.
+        tracker.displayed(&cached);
+        assert_eq!(tracker.badge(), Badge::Scheduled);
+
+        tracker.observe(&status("2026-10-28T07:00:00Z", None));
+        tracker.displayed(&cached);
+        assert_eq!(tracker.badge(), Badge::NewReset);
+    }
+
     #[test]
     fn visible_panel_does_not_acknowledge_undisplayed_background_event() {
         let mut tracker = Tracker {
