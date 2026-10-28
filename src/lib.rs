@@ -10,5 +10,7 @@ mod format;
 mod model;
 pub mod monitor;
 mod ui;
+pub mod settings;
+pub mod i18n;
 
-pub use ui::{App, set_close_handler, set_open_handler, set_visible};
+pub use ui::{App, refresh_language, set_close_handler, set_open_handler, set_visible, avatar_changed};

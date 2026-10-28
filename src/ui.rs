@@ -12,7 +12,7 @@ use base64::Engine;
 use nsh_base::{button, theme, tooltip};
 use nsh_core::ui::prelude::*;
 
-use crate::{api, cache, calendar, format, model::*};
+use crate::{api, cache, calendar, format, model::*, settings, i18n::{self, tr}};
 
 /// Inner margin. The popover clips its content to a rounded shape with an
 /// arrow on top, so the panel keeps a margin larger than both: nothing of it
@@ -36,10 +36,25 @@ const STALE: i64 = 60;
 /// Panel visibility controls the detailed history refresh; status monitoring
 /// continues independently in the native host.
 static VISIBLE: AtomicBool = AtomicBool::new(false);
+static SETTINGS_EVENTS: OnceLock<async_channel::Sender<()>> = OnceLock::new();
 static SHOW_FRAME: OnceLock<async_channel::Sender<()>> = OnceLock::new();
 
 static OPEN: OnceLock<fn(&str)> = OnceLock::new();
 static CLOSE: OnceLock<fn()> = OnceLock::new();
+static AVATAR_EVENTS: OnceLock<async_channel::Sender<Option<Vec<u8>>>> = OnceLock::new();
+pub fn avatar_changed(bytes: Option<Vec<u8>>) {
+    if let Some(sender) = AVATAR_EVENTS.get() { let _ = sender.try_send(bytes); }
+}
+fn avatar_source(bytes: Option<Vec<u8>>) -> String {
+    let (mime, bytes) = bytes.map(|bytes| ("image/png", bytes))
+        .unwrap_or_else(|| ("image/jpeg", include_bytes!("../resources/codex-resets-logo.jpg").to_vec()));
+    format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// Notify the UI engine after a preference changes on AppKit's main thread.
+pub fn refresh_language() {
+    if let Some(sender) = SETTINGS_EVENTS.get() { let _ = sender.try_send(()); }
+}
 
 /// Tells the panel it is on screen (the host calls this as the popover
 /// opens and closes). The lightweight background monitor remains active.
@@ -96,10 +111,12 @@ struct State {
     /// Set for a moment after a refresh succeeds, so a fast answer still
     /// shows that something happened.
     flash: Signal<bool>,
+    avatar: Signal<String>,
 }
 
 #[component]
 pub fn App() -> impl IntoElement {
+    i18n::initialize();
     // NSH defers text drawing while detached. A visible popover must request
     // a frame even when cached data has not changed, so deferred draws run.
     let (sender, receiver) = async_channel::bounded(1);
@@ -108,6 +125,8 @@ pub fn App() -> impl IntoElement {
     }
     let _ = SHOW_FRAME.set(sender);
     // What was read last time paints first: no empty panel, no waiting.
+    let (settings_sender, settings_receiver) = async_channel::bounded(1);
+    let _ = SETTINGS_EVENTS.set(settings_sender);
     let cached = cache::load();
     let now = format::now_epoch();
     let state = State {
@@ -127,7 +146,22 @@ pub fn App() -> impl IntoElement {
         updated_at: signal(cached.as_ref().map(|cache| cache.saved_at)),
         pulse: signal(0.85_f32),
         flash: signal(false),
+        avatar: signal(avatar_source(settings::load_avatar())),
     };
+
+    spawn(async move {
+        while settings_receiver.recv().await.is_ok() {
+            i18n::refresh();
+        }
+    });
+
+    let (avatar_sender, avatar_receiver) = async_channel::unbounded();
+    let _ = AVATAR_EVENTS.set(avatar_sender);
+    spawn(async move {
+        while let Ok(event) = avatar_receiver.recv().await {
+            state.avatar.set(avatar_source(event));
+        }
+    });
 
     spawn(async move {
         while receiver.recv().await.is_ok() {
@@ -254,13 +288,11 @@ fn header(state: State) -> impl IntoElement {
         .child(
             button()
                 .size(px(32.0))
-                .accessibility_label("Open Codex Resets website")
+                .accessibility_label(move || Some(tr("Open Codex Resets website", "打开 Codex Resets 网站").into()))
                 .on_press(|| open(api::SITE))
                 .hover(|style| style.opacity(0.75))
                 .child(
-                    image(format!("data:image/jpeg;base64,{}",
-                        base64::engine::general_purpose::STANDARD.encode(
-                            include_bytes!("../resources/codex-resets-logo.jpg"))))
+                    image(move || state.avatar.get())
                         .size(px(32.0))
                         .rounded(px(16.0)),
                 ),
@@ -272,7 +304,7 @@ fn header(state: State) -> impl IntoElement {
                 .gap(px(3.0))
                 .child(
                     button()
-                        .accessibility_label("Open Codex Resets website")
+                        .accessibility_label(move || Some(tr("Open Codex Resets website", "打开 Codex Resets 网站").into()))
                         .hover(|style| style.opacity(0.75))
                         .on_press(|| open(api::SITE))
                         .child(
@@ -297,7 +329,7 @@ fn header(state: State) -> impl IntoElement {
                 .items_center()
                 .justify_center()
                 .rounded(px(6.0))
-                .accessibility_label("Refresh")
+                .accessibility_label(move || Some(tr("Refresh", "刷新").into()))
                 .disabled(move || state.busy.get())
                 .opacity(move || if state.busy.get() { 0.4_f32 } else { 1.0_f32 })
                 .hover(|style| style.bg(tint(blue(), 0.12, 0.2)))
@@ -308,7 +340,7 @@ fn header(state: State) -> impl IntoElement {
                 })
                 .child(
                     view()
-                        .tooltip(tooltip().child(text("Refresh")))
+                        .tooltip(tooltip().child(text(move || tr("Refresh", "刷新"))))
                         .child(
                             view()
                                 .size(px(26.0))
@@ -324,24 +356,24 @@ fn header(state: State) -> impl IntoElement {
 
 fn subtitle(state: State) -> String {
     if state.busy.get() {
-        return "Refreshing…".to_owned();
+        return tr("Refreshing…", "刷新中…").to_owned();
     }
     if state.flash.get() {
         return match state.updated_at.get() {
-            Some(at) => format!("Updated · {}", format::clock_time(at)),
-            None => "Updated".to_owned(),
+            Some(at) => format!("{} · {}", tr("Updated", "已更新"), format::clock_time(at)),
+            None => tr("Updated", "已更新").to_owned(),
         };
     }
     if state.status.get().is_none() {
         return if state.error.get().is_some() {
-            "Unable to connect"
+            tr("Unable to connect", "无法连接")
         } else {
-            "Connecting…"
+            tr("Connecting…", "连接中…")
         }
         .to_owned();
     }
     match state.updated_at.get() {
-        Some(at) => format!("Updated at {}", format::clock_time(at)),
+        Some(at) => format!("{} {}", tr("Updated at", "更新于"), format::clock_time(at)),
         None => "codex-resets.com".to_owned(),
     }
 }
@@ -360,7 +392,7 @@ fn status_area(state: State) -> impl IntoElement {
 }
 
 fn service_description() -> impl IntoElement {
-    text("We watch ")
+    text(move || tr("We watch ", "我们关注 "))
         .text_size(px(11.0))
         .text_color(move || theme().muted_foreground)
         .child(
@@ -369,7 +401,7 @@ fn service_description() -> impl IntoElement {
                 .cursor_pointer()
                 .on_press(|| open("https://x.com/thsottiaux")),
         )
-        .child(text(" for Codex reset announcements, so you don't have to."))
+        .child(text(move || tr(" for Codex reset announcements, so you don't have to.", " 的 Codex 重置公告，为你及时汇总。")))
 }
 
 fn placeholder(state: State) -> impl IntoElement {
@@ -428,15 +460,15 @@ fn failure_view(state: State) -> impl IntoElement {
         .gap_3()
         .h(px(260.0))
         .child(
-            text(move || {
-                state
-                    .error
-                    .get()
-                    .unwrap_or_else(|| "Unable to load data".to_owned())
-            })
-            .text_size(px(12.0))
-            .text_color(move || theme().destructive)
-            .number_of_lines(4),
+            text(move || tr("Unable to load data", "暂时无法加载数据"))
+                .text_size(px(13.0))
+                .font_weight(FontWeight::SEMIBOLD),
+        )
+        .child(
+            text(move || tr("Check your connection or try again shortly.", "请检查网络连接，或稍后重试。"))
+                .text_size(px(11.0))
+                .text_color(move || theme().muted_foreground)
+                .number_of_lines(2),
         )
         .child(
             view()
@@ -452,7 +484,7 @@ fn failure_view(state: State) -> impl IntoElement {
                     }
                 })
                 .child(
-                    text("Retry")
+                    text(move || tr("Retry", "重试"))
                         .text_size(px(11.0))
                         .text_color(move || theme().primary_foreground),
                 ),
@@ -469,7 +501,7 @@ fn latest_card(state: State) -> impl IntoElement {
                 .items_center()
                 .gap_2()
                 .child(
-                    text("Latest reset")
+                    text(move || tr("Latest reset", "最近一次重置"))
                         .text_size(px(14.0))
                         .font_weight(FontWeight::MEDIUM),
                 )
@@ -479,7 +511,7 @@ fn latest_card(state: State) -> impl IntoElement {
                         latest(state)
                             .and_then(|reset| format::parse(&reset.announced_at))
                             .map(|at| format::relative(at, state.now.get()))
-                            .unwrap_or_else(|| "No resets yet".to_owned())
+                            .unwrap_or_else(|| tr("No resets yet", "暂无重置").to_owned())
                     })
                     .text_size(px(14.0))
                     .font_weight(FontWeight::MEDIUM)
@@ -511,7 +543,7 @@ fn announced_next(state: State) -> impl IntoElement {
         .flex_col()
         .gap(px(5.0))
         .rounded(px(4.0))
-        .accessibility_label("Open scheduled reset announcement")
+        .accessibility_label(move || Some(tr("Open scheduled reset announcement", "打开预定重置公告").into()))
         .hover(|style| style.bg(theme().accent))
         .on_press(move || {
             if let Some(url) = state
@@ -529,7 +561,7 @@ fn announced_next(state: State) -> impl IntoElement {
                 .items_center()
                 .gap_2()
                 .child(
-                    text("Next reset")
+                    text(move || tr("Next reset", "下次重置"))
                         .text_size(px(13.0))
                         .font_weight(FontWeight::MEDIUM),
                 )
@@ -547,7 +579,7 @@ fn announced_next(state: State) -> impl IntoElement {
         .child(
             text(move || {
                 scheduled_at(state)
-                    .map(|at| format!("{} · Scheduled ↗", format::absolute(at)))
+                    .map(|at| format!("{} · {} ↗", format::absolute(at), tr("Scheduled", "已预定")))
                     .unwrap_or_default()
             })
             .text_size(px(11.0))
@@ -582,8 +614,8 @@ fn watch_row(state: State) -> impl IntoElement {
                             .get()
                             .and_then(|data| data.active_watch)
                             .map(|watch| match watch.reset_chance_percent {
-                                Some(chance) => format!("Watch window · {chance}% chance"),
-                                None => format!("Watch window · {}", watch.level),
+                                Some(chance) => format!("{} · {chance}% {}", tr("Watch window", "观察窗口"), tr("chance", "概率")),
+                                None => format!("{} · {}", tr("Watch window", "观察窗口"), watch.level),
                             })
                             .unwrap_or_default()
                     })
@@ -620,7 +652,7 @@ fn stats_row(state: State) -> impl IntoElement {
                 .flex_1()
                 .gap(px(4.0))
                 .child(
-                    text("Total resets")
+                    text(move || tr("Total resets", "重置总次数"))
                         .text_size(px(11.0))
                         .text_color(move || theme().muted_foreground),
                 )
@@ -643,7 +675,7 @@ fn stats_row(state: State) -> impl IntoElement {
                 .flex_1()
                 .gap(px(4.0))
                 .child(
-                    text("Avg. interval")
+                    text(move || tr("Avg. interval", "平均间隔"))
                         .text_size(px(11.0))
                         .text_color(move || theme().muted_foreground),
                 )
@@ -653,8 +685,8 @@ fn stats_row(state: State) -> impl IntoElement {
                             .status
                             .get()
                             .and_then(|data| data.stats.avg_interval_days)
-                            .map(|days| format!("{} days", format::number(days)))
-                            .unwrap_or_else(|| "No data".to_owned())
+                            .map(|days| format!("{} {}", format::number(days), tr("days", "天")))
+                            .unwrap_or_else(|| tr("No data", "暂无数据").to_owned())
                     })
                     .text_size(px(15.0))
                     .font_weight(FontWeight::SEMIBOLD)
@@ -667,16 +699,16 @@ fn stats_row(state: State) -> impl IntoElement {
                 .flex_1()
                 .gap(px(4.0))
                 .child(
-                    text("Longest wait")
+                    text(move || tr("Longest wait", "最长等待"))
                         .text_size(px(11.0))
                         .text_color(move || theme().muted_foreground),
                 )
                 .child(
                     text(move || {
                         longest_wait_days(&state.history.get(), state.has_more.get())
-                            .map(|days| format!("{} days", format::number(days)))
+                            .map(|days| format!("{} {}", format::number(days), tr("days", "天")))
                             .unwrap_or_else(|| {
-                                if state.busy.get() { "Loading…" } else { "No data" }.to_owned()
+                                if state.busy.get() { tr("Loading…", "加载中…") } else { tr("No data", "暂无数据") }.to_owned()
                             })
                     })
                     .text_size(px(15.0))
@@ -741,13 +773,13 @@ fn reset_calendar(state: State) -> impl IntoElement {
                 .flex_row()
                 .items_center()
                 .child(
-                    text("Reset activity")
+                    text(move || tr("Reset activity", "重置记录"))
                         .text_size(px(12.0))
                         .font_weight(FontWeight::MEDIUM),
                 )
                 .child(view().flex_1())
                 .child(
-                    text("20 weeks · Local time")
+                    text(move || tr("20 weeks · Local time", "20 周 · 本地时间"))
                         .text_size(px(10.0))
                         .text_color(move || theme().muted_foreground),
                 ),
@@ -757,8 +789,8 @@ fn reset_calendar(state: State) -> impl IntoElement {
                 .flex_row()
                 .gap(px(3.0))
                 .child(view().flex_col().gap(px(3.0)).w(px(18.0)).children(
-                    ["M", "", "W", "", "F", "", "S"].into_iter().map(|label| {
-                        text(label)
+                    [ ("M", "一"), ("", ""), ("W", "三"), ("", ""), ("F", "五"), ("", ""), ("S", "日") ].into_iter().map(|(en, zh)| {
+                        text(move || tr(en, zh))
                             .text_size(px(9.0))
                             .h(px(12.0))
                             .text_color(move || theme().muted_foreground)
@@ -829,19 +861,19 @@ fn reset_calendar(state: State) -> impl IntoElement {
                 .child(view().flex_1())
                 .child(view().size(px(7.0)).rounded(px(2.0)).bg(blue()))
                 .child(
-                    text("regular")
+                    text(move || tr("regular", "常规"))
                         .text_size(px(9.0))
                         .text_color(move || theme().muted_foreground),
                 )
                 .child(view().size(px(7.0)).rounded(px(2.0)).bg(reset_color(true)))
                 .child(
-                    text("banked")
+                    text(move || tr("banked", "储备"))
                         .text_size(px(9.0))
                         .text_color(move || theme().muted_foreground),
                 )
                 .child(view().size(px(7.0)).rounded(px(2.0)).bg(no_reset_color))
                 .child(
-                    text("No resets")
+                    text(move || tr("No resets", "无重置"))
                         .text_size(px(9.0))
                         .text_color(move || theme().muted_foreground),
                 ),
@@ -851,23 +883,23 @@ fn reset_calendar(state: State) -> impl IntoElement {
 fn error_banner(state: State) -> impl IntoElement {
     when(
         move || state.error.get().is_some() && state.status.get().is_some(),
-        move || {
-            view()
-                .px(px(11.0))
-                .py(px(7.0))
-                .rounded(px(8.0))
-                .bg(move || tint(theme().destructive, 0.10, 0.16))
-                .child(
-                    text(move || state.error.get().unwrap_or_default())
-                        .text_size(px(11.0))
-                        .text_color(move || theme().destructive)
-                        .number_of_lines(2),
-                )
-        },
+        move || view()
+            .flex_row().items_center().gap(px(10.0))
+            .px(px(10.0)).py(px(8.0)).rounded(px(7.0))
+            .bg(move || tint(theme().muted_foreground, 0.08, 0.12))
+            .child(text(move || tr(
+                "Some data could not be updated. Try again shortly.",
+                "部分数据暂时无法更新，请稍后重试。",
+            )).flex_1().text_size(px(11.0))
+                .text_color(move || theme().muted_foreground).number_of_lines(2))
+            .child(button()
+                .disabled(move || state.busy.get())
+                .opacity(move || if state.busy.get() { 0.5_f32 } else { 1.0_f32 })
+                .on_press(move || { if !state.busy.get() { spawn(reload_all(state)); } })
+                .child(text(move || if state.busy.get() { tr("Retrying…", "重试中…") } else { tr("Retry", "重试") })
+                    .text_size(px(11.0)).text_color(blue))),
     )
 }
-
-// ──────────────────────────── history ────────────────────────────
 
 fn history_section(state: State) -> impl IntoElement {
     view()
@@ -886,7 +918,7 @@ fn history_section(state: State) -> impl IntoElement {
                 .px(px(PAD))
                 .h(px(34.0))
                 .child(
-                    text("Recent resets")
+                    text(move || tr("Recent resets", "近期重置"))
                         .text_size(px(11.0))
                         .text_color(blue)
                         .font_weight(FontWeight::SEMIBOLD),
@@ -908,7 +940,7 @@ fn history_section(state: State) -> impl IntoElement {
                     .child(when(
                         move || state.history.get().is_empty(),
                         move || {
-                            text("No reset records yet")
+                            text(move || tr("No reset records yet", "暂无重置记录"))
                                 .text_size(px(12.0))
                                 .text_color(move || theme().muted_foreground)
                                 .p(px(8.0))
@@ -940,7 +972,7 @@ fn load_more(state: State) -> impl IntoElement {
                         spawn(load_more_task(state));
                     }
                 })
-                .child(text("Load more").text_size(px(11.0)).text_color(blue))
+                .child(text(move || tr("Load more", "加载更多")).text_size(px(11.0)).text_color(blue))
         },
     )
 }
@@ -990,9 +1022,9 @@ fn history_row(row: ReadSignal<Reset>, index: ReadSignal<usize>) -> impl IntoEle
                         if reset.reset_type == ResetType::Banked {
                             reset.reset_type.label()
                         } else if reset.source.as_ref().is_some_and(|s| s.kind == "observed") {
-                            "Observed"
+                            tr("Observed", "已观测")
                         } else {
-                            "Announcement"
+                            tr("Announcement", "公告")
                         }
                     })
                     .text_size(px(10.0))
@@ -1039,13 +1071,13 @@ fn attribution_footer() -> impl IntoElement {
                 .gap(px(3.0))
                 .pt(px(6.0))
                 .child(
-                    text("Data from")
+                    text(move || tr("Data from", "数据来源"))
                         .text_size(px(10.0))
                         .text_color(move || theme().muted_foreground),
                 )
                 .child(
                     button()
-                        .accessibility_label("Open Codex Resets website")
+                        .accessibility_label(move || Some(tr("Open Codex Resets website", "打开 Codex Resets 网站").into()))
                         .hover(|style| style.opacity(0.75))
                         .on_press(|| open(api::SITE))
                         .child(text("Codex Resets").text_size(px(10.0)).text_color(blue)),
@@ -1105,6 +1137,7 @@ fn scheduled_at(state: State) -> Option<i64> {
 }
 
 fn remember_error(state: State, message: String) {
+    trace(&format!("refresh failed: {message}"));
     if state.error.get().is_none() {
         state.error.set(Some(message));
     }

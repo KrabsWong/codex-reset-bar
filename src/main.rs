@@ -7,6 +7,8 @@
 
 #![cfg(target_os = "macos")]
 
+mod preferences;
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -17,6 +19,7 @@ use objc2::{
     runtime::ProtocolObject, sel,
 };
 use objc2_app_kit::{
+    NSAlert, NSBezierPath, NSColor, NSOpenPanel, NSBitmapImageRep, NSModalResponseOK,
     NSAppearance, NSAppearanceNameDarkAqua, NSApplication, NSApplicationActivationPolicy,
     NSBackingStoreType, NSBitmapImageFileType, NSImage, NSPopover, NSPopoverBehavior,
     NSEventMask, NSEventType, NSEventModifierFlags, NSMenu, NSMenuItem,
@@ -25,7 +28,7 @@ use objc2_app_kit::{
 };
 use objc2_quartz_core::CALayer;
 use objc2_foundation::{
-    NSData, NSDate, NSDefaultRunLoopMode, NSDictionary, NSNotification, NSObject, NSObjectProtocol,
+    NSArray, NSData, NSDate, NSDefaultRunLoopMode, NSDictionary, NSNotification, NSObject, NSObjectProtocol,
     NSPoint, NSRect, NSRectEdge, NSRunLoop, NSSize, NSString, NSURL, ns_string,
 };
 
@@ -41,6 +44,7 @@ struct Menu {
     /// Kept alive with the popover: dropping it stops the engine.
     _view: Rc<AppView>,
     loaded: Cell<bool>,
+    badge: Cell<codex_reset::monitor::Badge>,
 }
 
 thread_local! {
@@ -54,6 +58,18 @@ fn main() {
     let arguments: Vec<String> = std::env::args().collect();
     if arguments.iter().any(|argument| argument == "--self-test") {
         self_test();
+        return;
+    }
+    if let Some(flag) = arguments.iter().position(|arg| arg == "--settings-snapshot") {
+        let mtm = MainThreadMarker::new().unwrap();
+        let app = NSApplication::sharedApplication(mtm);
+        app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+        if arguments.iter().any(|arg| arg == "--dark") {
+            app.setAppearance(NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }).as_deref());
+        }
+        preferences::show();
+        pump(0.5);
+        preferences::snapshot(arguments.get(flag + 1).expect("snapshot path"));
         return;
     }
     if let Some(flag) = arguments
@@ -93,6 +109,7 @@ fn main() {
         toggle_panel();
     }
 
+    if arguments.iter().any(|arg| arg == "--settings") { preferences::show(); }
     app.run();
 }
 
@@ -132,7 +149,8 @@ fn menu_bar(mtm: MainThreadMarker) -> Menu {
     if let Some(button) = item.button(mtm) {
         match NSImage::initWithData(
             NSImage::alloc(),
-            &NSData::with_bytes(include_bytes!("../resources/status-logo.png")),
+            &NSData::with_bytes(&codex_reset::settings::load_avatar()
+                .unwrap_or_else(|| include_bytes!("../resources/status-logo.png").to_vec())),
         ) {
             Some(icon) => {
                 icon.setSize(NSSize::new(18.0, 18.0));
@@ -154,6 +172,7 @@ fn menu_bar(mtm: MainThreadMarker) -> Menu {
         _controller: target,
         _view: view,
         loaded: Cell::new(false),
+        badge: Cell::new(codex_reset::monitor::Badge::None),
     }
 }
 
@@ -177,7 +196,7 @@ fn show_context_menu(target: &Controller) {
     menu.setAutoenablesItems(false);
     for label in [
         format!("Codex Resets {}", env!("CARGO_PKG_VERSION")),
-        "Auto-refresh: every 60 seconds".to_owned(),
+        codex_reset::i18n::tr("Auto-refresh: every 60 seconds", "自动刷新：每 60 秒").to_owned(),
     ] {
         let info = unsafe {
             NSMenuItem::initWithTitle_action_keyEquivalent(
@@ -188,10 +207,21 @@ fn show_context_menu(target: &Controller) {
         menu.addItem(&info);
     }
     menu.addItem(&NSMenuItem::separatorItem(mtm));
+    let settings = unsafe {
+        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str(codex_reset::i18n::tr("Settings", "设置")),
+            Some(sel!(openSettings:)), ns_string!(","),
+        );
+        item.setTarget(Some(target));
+        item
+    };
+    menu.addItem(&settings);
+    menu.addItem(&NSMenuItem::separatorItem(mtm));
     // The controller implements quitApp: and lives for the entire status item's lifetime.
     let quit = unsafe {
         let item = NSMenuItem::initWithTitle_action_keyEquivalent(
-            NSMenuItem::alloc(mtm), ns_string!("Quit Codex Resets"),
+            NSMenuItem::alloc(mtm), &NSString::from_str(codex_reset::i18n::tr("Quit Codex Resets", "退出 Codex Resets")),
             Some(sel!(quitApp:)), ns_string!("q"),
         );
         item.setTarget(Some(target));
@@ -211,13 +241,16 @@ fn update_badge(badge: codex_reset::monitor::Badge) {
             let slot = slot.borrow();
             let Some(menu) = slot.as_ref() else { return };
             let Some(button) = menu.item.button(mtm) else { return };
+            menu.badge.set(badge);
             use codex_reset::monitor::Badge;
             let bytes: &[u8] = match badge {
                 Badge::None => include_bytes!("../resources/status-logo.png"),
                 Badge::NewReset => include_bytes!("../resources/status-logo-new.png"),
                 Badge::Scheduled => include_bytes!("../resources/status-logo-scheduled.png"),
             };
-            if let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(bytes)) {
+            let custom = codex_reset::settings::load_avatar();
+            if let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(custom.as_deref().unwrap_or(bytes))) {
+                let image = if custom.is_some() { avatar_badge(&image, badge) } else { image };
                 image.setSize(NSSize::new(18.0, 18.0));
                 image.setTemplate(false);
                 button.setImage(Some(&image));
@@ -227,6 +260,106 @@ fn update_badge(badge: codex_reset::monitor::Badge) {
             }
         });
     });
+}
+
+/// Import a local image once; both surfaces use the same normalized PNG.
+fn change_avatar(reset: bool) {
+    on_main(move || {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let result = (|| -> Result<Option<Vec<u8>>, String> {
+            use codex_reset::i18n::tr;
+            let path = codex_reset::settings::avatar_path()
+                .ok_or_else(|| tr("Cannot locate the settings folder.", "无法找到设置文件夹。").to_owned())?;
+            if reset {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {},
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(_) => return Err(tr("Could not reset the avatar.", "无法重置头像。").to_owned()),
+                }
+                return Ok(None);
+            }
+            // Close the transient popover before entering AppKit's modal loop.
+            MENU.with(|slot| {
+                if let Some(menu) = slot.borrow().as_ref() {
+                    unsafe { menu.popover.performClose(None) };
+                }
+            });
+            let panel = NSOpenPanel::openPanel(mtm);
+            panel.setCanChooseDirectories(false);
+            panel.setCanChooseFiles(true);
+            panel.setAllowsMultipleSelection(false);
+            panel.setTitle(Some(&NSString::from_str(tr("Choose an avatar", "选择头像"))));
+            panel.setPrompt(Some(&NSString::from_str(tr("Choose", "选择"))));
+            let types = NSArray::from_retained_slice(&["png", "jpg", "jpeg", "heic", "tiff", "webp"].map(NSString::from_str));
+            #[allow(deprecated)]
+            panel.setAllowedFileTypes(Some(&types));
+            NSApplication::sharedApplication(mtm).activate();
+            if panel.runModal() != NSModalResponseOK { return Ok(codex_reset::settings::load_avatar()); }
+            let source = panel.URL().and_then(|url| url.path())
+                .ok_or_else(|| tr("Could not read this image.", "无法读取此图片。").to_owned())?;
+            let source = std::path::PathBuf::from(source.to_string());
+            let invalid = || tr("Choose a valid image smaller than 20 MB.", "请选择小于 20 MB 的有效图片。").to_owned();
+            if std::fs::metadata(&source).map_err(|_| invalid())?.len() > 20 * 1024 * 1024 { return Err(invalid()); }
+            let bytes = std::fs::read(source).map_err(|_| invalid())?;
+            let png = normalize_avatar(&bytes).ok_or_else(invalid)?;
+            let directory = path.parent().ok_or_else(invalid)?;
+            std::fs::create_dir_all(directory).and_then(|_| {
+                let temporary = path.with_extension("png.tmp");
+                std::fs::write(&temporary, &png)?;
+                std::fs::rename(temporary, &path)
+            }).map_err(|_| tr("Could not save the avatar.", "无法保存头像。").to_owned())?;
+            Ok(Some(png))
+        })();
+        match result {
+            Ok(bytes) => {
+                codex_reset::avatar_changed(bytes);
+                preferences::refresh();
+                let badge = MENU.with(|slot| slot.borrow().as_ref().map(|menu| menu.badge.get()));
+                if let Some(badge) = badge { update_badge(badge); }
+            }
+            Err(message) => {
+                let alert = NSAlert::new(mtm);
+                alert.setMessageText(&NSString::from_str(&message));
+                alert.runModal();
+            }
+        }
+    });
+}
+
+#[allow(deprecated)]
+fn normalize_avatar(bytes: &[u8]) -> Option<Vec<u8>> {
+    let source = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(bytes))?;
+    let size = source.size();
+    if !size.width.is_finite() || !size.height.is_finite() || size.width <= 0.0 || size.height <= 0.0 { return None; }
+    let edge = 128.0;
+    let scale = edge / size.width.min(size.height);
+    let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(edge, edge));
+    image.lockFocus();
+    NSBezierPath::bezierPathWithOvalInRect(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(edge, edge))).addClip();
+    source.drawInRect(NSRect::new(
+        NSPoint::new((edge - size.width * scale) / 2.0, (edge - size.height * scale) / 2.0),
+        NSSize::new(size.width * scale, size.height * scale),
+    ));
+    image.unlockFocus();
+    let tiff = image.TIFFRepresentation()?;
+    let bitmap = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff)?;
+    unsafe { bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }.map(|data| data.to_vec())
+}
+
+/// Preserve new-reset/scheduled indicators when a custom avatar is installed.
+#[allow(deprecated)]
+fn avatar_badge(source: &NSImage, badge: codex_reset::monitor::Badge) -> Retained<NSImage> {
+    use codex_reset::monitor::Badge;
+    let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(18.0, 18.0));
+    image.lockFocus();
+    source.drawInRect(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(18.0, 18.0)));
+    if badge != Badge::None {
+        let (red, green, blue) = if badge == Badge::NewReset { (0.2, 0.8, 0.4) } else { (1.0, 0.65, 0.1) };
+        NSColor::colorWithSRGBRed_green_blue_alpha(red, green, blue, 1.0).setFill();
+        NSBezierPath::bezierPathWithOvalInRect(NSRect::new(NSPoint::new(12.0, 0.0), NSSize::new(6.0, 6.0))).fill();
+    }
+    image.unlockFocus();
+    image
 }
 
 /// Shows the panel under the status item, or hides it when it is open.
@@ -375,6 +508,18 @@ fn self_test() {
 
     let mut ok = initial_frame.is_some() && initial_frame == panel_frame();
     println!("Initial placement stable across run loop: {ok}");
+    let avatar_ok = normalize_avatar(include_bytes!("../resources/codex-resets-logo.jpg"))
+        .and_then(|bytes| NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(&bytes)))
+        .is_some_and(|image| {
+            let size = image.size();
+            size.width == size.height && size.width > 0.0
+                && [codex_reset::monitor::Badge::None, codex_reset::monitor::Badge::NewReset,
+                    codex_reset::monitor::Badge::Scheduled].into_iter()
+                    .all(|badge| avatar_badge(&image, badge).size() == NSSize::new(18.0, 18.0))
+        }) && normalize_avatar(b"not an image").is_none();
+    println!("Avatar import and badge rendering: {avatar_ok}");
+    ok &= avatar_ok;
+
     if std::env::args().any(|arg| arg == "--redraw-test") {
         for _ in 0..3 {
             let layers = MENU.with(|slot| {
@@ -630,6 +775,25 @@ define_class!(
                 toggle_panel();
             }
         }
+
+        #[unsafe(method(openSettings:))]
+        fn settings_action(&self, _sender: Option<&AnyObject>) {
+            // Wait until menu tracking ends before opening the settings window.
+            on_main(|| {
+                preferences::show();
+            });
+        }
+
+        #[unsafe(method(changeLanguage:))]
+        fn language_action(&self, sender: &objc2_app_kit::NSPopUpButton) {
+            preferences::change_language(sender.indexOfSelectedItem());
+        }
+
+        #[unsafe(method(changeAvatar:))]
+        fn avatar_action(&self, _sender: Option<&AnyObject>) { change_avatar(false); }
+
+        #[unsafe(method(resetAvatar:))]
+        fn reset_avatar_action(&self, _sender: Option<&AnyObject>) { change_avatar(true); }
 
         #[unsafe(method(quitApp:))]
         fn quit_action(&self, _sender: Option<&AnyObject>) {

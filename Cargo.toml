@@ -1,6 +1,6 @@
 [package]
 name = "codex-reset"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "A macOS menu bar app for Codex reset announcements, built with Native Shell"
 publish = false
@@ -35,6 +35,17 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["
 objc2 = { version = "0.6.5", features = ["std"] }
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
   "std",
+  "NSBox",
+  "NSFont",
+  "NSTextField",
+  "NSImageView",
+  "NSPopUpButton",
+  "NSAlert",
+  "NSBezierPath",
+  "NSColor",
+  "NSOpenPanel",
+  "NSSavePanel",
+  "NSPanel",
   "NSAppearance",
   "NSApplication",
   "NSBitmapImageRep",

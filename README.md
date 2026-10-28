@@ -14,7 +14,8 @@ Built in Rust with [Native Shell](https://nsh.dev) for the interface and AppKit 
 - **Announcement history:** original messages, up to three lines per row, with the full text available on hover. Click a record to open its source when available.
 - **Announced schedules:** upcoming resets appear only when provided by the service. The app does not predict the next reset from historical intervals.
 - **Background monitoring:** checks status at launch and approximately every 60 seconds, even when the popover has never been opened.
-- **Native appearance:** English interface, system light and dark modes, local caching, and manual refresh with a spinning indicator while requests are in progress.
+- **Native appearance:** system light and dark modes, local caching, and manual refresh with a spinning indicator while requests are in progress.
+- **Language and avatar:** right-click the menu bar icon and choose **Settings** to open a separate native settings window and switch between English (default) and Simplified Chinese, or upload a custom avatar for the menu bar and popover. Preferences survive restarts; announcement messages remain in their original language.
 
 ## Menu bar indicators
 
@@ -63,7 +64,7 @@ To create an Apple Silicon distribution archive after building on arm64:
 ```sh
 ditto -c -k --sequesterRsrc --keepParent \
   'dist/Codex Resets.app' \
-  dist/Codex-Resets-0.1.2-macOS-arm64.zip
+  dist/Codex-Resets-0.1.3-macOS-arm64.zip
 ```
 
 ## Data and storage
@@ -81,8 +82,10 @@ Files are stored in `~/Library/Application Support/CodexResets/`:
 
 - `cache.json`: previously fetched statistics and history, displayed while fresh data loads.
 - `seen.json`: the last viewed reset timestamp used by the menu bar indicator.
+- `settings.json`: the selected interface language.
+- `avatar.png`: a local copy of the custom avatar, removed when restoring the default.
 
-Opening the popover refreshes its detailed data. Existing history stays visible until all pages have loaded; an unchanged result does not replace the list, and a failed page leaves the previous history intact. Background status checks use the system's `NSURLSession` and bypass local HTTP caches; panel requests use `Cache-Control: no-cache`. Network failures preserve available data.
+Opening the popover refreshes its detailed data. Existing history stays visible until all pages have loaded; an unchanged result does not replace the list, and a failed page leaves the previous history intact. Background status checks use the system's `NSURLSession` and bypass local HTTP caches; panel requests use `Cache-Control: no-cache`. Network failures preserve available data and show a plain-language message with a retry action. Technical diagnostics are only logged when `CODEX_RESET_TRACE` is enabled.
 
 ## Development and verification
 

@@ -1,5 +1,6 @@
 //! Local-date buckets for the contribution calendar. Pagination gaps are
 //! unknown, never presented as days without a reset.
+use crate::{i18n, settings::Language};
 use crate::model::{Reset, ResetType};
 use chrono::{Datelike, Duration, Local, NaiveDate};
 
@@ -16,15 +17,18 @@ pub struct Day {
 }
 
 impl Day {
-    pub fn hint(&self) -> String {
+    pub fn hint(&self) -> String { self.hint_in(i18n::language()) }
+
+    fn hint_in(&self, language: Language) -> String {
+        let tr = |en, zh| if language == Language::English { en } else { zh };
         let detail = if self.future {
-            "Future date".to_owned()
+            tr("Future date", "未来日期").to_owned()
         } else if self.regular + self.banked > 0 {
-            format!("{} regular, {} banked", self.regular, self.banked)
+            format!("{} {}, {} {}", self.regular, tr("regular", "常规"), self.banked, tr("banked", "储备"))
         } else if self.known {
-            "No resets".to_owned()
+            tr("No resets", "无重置").to_owned()
         } else {
-            "History not loaded".to_owned()
+            tr("History not loaded", "历史记录未加载").to_owned()
         };
         format!("{} · {}", self.date, detail)
     }
@@ -123,9 +127,9 @@ mod tests {
     #[test]
     fn empty_day_hint_requires_loaded_history() {
         let today = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
-        assert_eq!(days(&[], false, today)[0].hint(), "2026-06-15 · No resets");
+        assert_eq!(days(&[], false, today)[0].hint_in(Language::English), "2026-06-15 · No resets");
         assert_eq!(
-            days(&[], true, today)[0].hint(),
+            days(&[], true, today)[0].hint_in(Language::English),
             "2026-06-15 · History not loaded"
         );
         let rows = [row(today - Duration::weeks(21), ResetType::Regular)];

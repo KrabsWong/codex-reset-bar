@@ -15,8 +15,8 @@ pub enum ResetType {
 impl ResetType {
     pub fn label(self) -> &'static str {
         match self {
-            ResetType::Regular => "regular",
-            ResetType::Banked => "banked",
+            ResetType::Regular => crate::i18n::tr("regular", "常规"),
+            ResetType::Banked => crate::i18n::tr("banked", "储备"),
         }
     }
 }
