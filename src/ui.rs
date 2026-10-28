@@ -406,7 +406,7 @@ fn service_description() -> impl IntoElement {
 
 fn placeholder(state: State) -> impl IntoElement {
     when(move || state.loading.get(), move || skeleton(state))
-        .otherwise(move || failure_view(state))
+        .otherwise(move || failure_view())
 }
 
 /// What waits for the first answer: blocks where the cards and rows will be,
@@ -452,7 +452,7 @@ fn skeleton_block(state: State, width: f32, height: f32) -> impl IntoElement {
         .transition_opacity()
 }
 
-fn failure_view(state: State) -> impl IntoElement {
+fn failure_view() -> impl IntoElement {
     view()
         .flex_col()
         .items_center()
@@ -465,29 +465,10 @@ fn failure_view(state: State) -> impl IntoElement {
                 .font_weight(FontWeight::SEMIBOLD),
         )
         .child(
-            text(move || tr("Check your connection or try again shortly.", "请检查网络连接，或稍后重试。"))
+            text(move || tr("Check your connection, then click refresh at the top.", "请检查网络连接，再点击顶部刷新。"))
                 .text_size(px(11.0))
                 .text_color(move || theme().muted_foreground)
                 .number_of_lines(2),
-        )
-        .child(
-            view()
-                .px_3()
-                .py(px(6.0))
-                .rounded(px(7.0))
-                .bg(move || theme().primary)
-                .active(|style| style.opacity(0.7))
-                .cursor_pointer()
-                .on_press(move || {
-                    if !state.busy.get() {
-                        spawn(reload_all(state));
-                    }
-                })
-                .child(
-                    text(move || tr("Retry", "重试"))
-                        .text_size(px(11.0))
-                        .text_color(move || theme().primary_foreground),
-                ),
         )
 }
 
@@ -884,20 +865,20 @@ fn error_banner(state: State) -> impl IntoElement {
     when(
         move || state.error.get().is_some() && state.status.get().is_some(),
         move || view()
-            .flex_row().items_center().gap(px(10.0))
+            .mb(px(12.0))
             .px(px(10.0)).py(px(8.0)).rounded(px(7.0))
-            .bg(move || tint(theme().muted_foreground, 0.08, 0.12))
+            .bg(|| AdaptiveColor {
+                light: rgb(0xffedcc).into(),
+                dark: rgb(0x452508).into(),
+            })
             .child(text(move || tr(
-                "Some data could not be updated. Try again shortly.",
-                "部分数据暂时无法更新，请稍后重试。",
-            )).flex_1().text_size(px(11.0))
-                .text_color(move || theme().muted_foreground).number_of_lines(2))
-            .child(button()
-                .disabled(move || state.busy.get())
-                .opacity(move || if state.busy.get() { 0.5_f32 } else { 1.0_f32 })
-                .on_press(move || { if !state.busy.get() { spawn(reload_all(state)); } })
-                .child(text(move || if state.busy.get() { tr("Retrying…", "重试中…") } else { tr("Retry", "重试") })
-                    .text_size(px(11.0)).text_color(blue))),
+                "Some data could not be updated. Click refresh at the top to try again.",
+                "部分数据暂时无法更新，点击顶部刷新即可重试。",
+            )).text_size(px(11.0))
+                .text_color(|| AdaptiveColor {
+                    light: rgb(0xb94000).into(),
+                    dark: rgb(0xffb35c).into(),
+                }).number_of_lines(2)),
     )
 }
 

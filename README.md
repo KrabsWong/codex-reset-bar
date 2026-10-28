@@ -85,7 +85,7 @@ Files are stored in `~/Library/Application Support/CodexResets/`:
 - `settings.json`: the selected interface language.
 - `avatar.png`: a local copy of the custom avatar, removed when restoring the default.
 
-Opening the popover refreshes its detailed data. Existing history stays visible until all pages have loaded; an unchanged result does not replace the list, and a failed page leaves the previous history intact. Background status checks use the system's `NSURLSession` and bypass local HTTP caches; panel requests use `Cache-Control: no-cache`. Network failures preserve available data and show a plain-language message with a retry action. Technical diagnostics are only logged when `CODEX_RESET_TRACE` is enabled.
+Opening the popover refreshes its detailed data. Existing history stays visible until all pages have loaded; an unchanged result does not replace the list, and a failed page leaves the previous history intact. Background status checks use the system's `NSURLSession` and bypass local HTTP caches; panel requests use `Cache-Control: no-cache`. Network failures preserve available data and show a plain-language message pointing to the refresh button. Technical diagnostics are only logged when `CODEX_RESET_TRACE` is enabled.
 
 ## Development and verification
 
