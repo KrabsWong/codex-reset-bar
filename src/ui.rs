@@ -1018,7 +1018,7 @@ fn history_row(state: State, row: ReadSignal<Reset>, index: ReadSignal<usize>) -
         .border_t(move || px(if index.get() == 0 { 0.0 } else { 1.0 }))
         .border_color(move || tint(blue(), 0.12, 0.18))
         .hover(move |style| {
-            style.bg(if unread_record(state, &row.get()) { tint(unread_foreground(), 0.2, 0.25) } else { AdaptiveColor {
+            style.bg(move || if unread_record(state, &row.get()) { tint(unread_foreground(), 0.2, 0.25) } else { AdaptiveColor {
                 light: rgb(0xe2ebff).into(),
                 dark: rgb(0x243a60).into(),
             } })
