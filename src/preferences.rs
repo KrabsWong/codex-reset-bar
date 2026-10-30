@@ -121,7 +121,7 @@ impl Preferences {
         self.updates.setEnabled(updater::available());
         self.updates.setState(if updater::automatic() { 1 } else { 0 });
         self.updates_hint.setStringValue(&NSString::from_str(if updater::available() {
-            tr("Daily checks. Badge only; no automatic pop-up.", "每天检查，仅显示更新标记，不自动弹窗。")
+            tr("Checks every 12 hours.", "每 12 小时检查一次。")
         } else {
             tr("Updates are unavailable in this build.", "此构建暂不支持更新。")
         }));

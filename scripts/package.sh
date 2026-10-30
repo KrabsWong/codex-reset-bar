@@ -37,7 +37,7 @@ info = plistlib.loads(p.read_bytes())
 info.update(CFBundleShortVersionString=version, CFBundleVersion=version,
     SUFeedURL='https://github.com/KrabsWong/codex-reset-bar/releases/latest/download/appcast.xml',
     SUPublicEDKey=os.environ['SPARKLE_PUBLIC_ED_KEY'], SUEnableAutomaticChecks=True,
-    SUScheduledCheckInterval=86400, SUAutomaticallyUpdate=False, SUAllowsAutomaticUpdates=False,
+    SUScheduledCheckInterval=43200, SUAutomaticallyUpdate=False, SUAllowsAutomaticUpdates=False,
     SUVerifyUpdateBeforeExtraction=True, SURequireSignedFeed=True,
     SUSignedFeedFailureExpirationInterval=0)
 p.write_bytes(plistlib.dumps(info))
