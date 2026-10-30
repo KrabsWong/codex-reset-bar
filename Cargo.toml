@@ -7,6 +7,11 @@ publish = false
 
 [workspace]
 
+[features]
+sparkle = []
+# Local A/B updater experiment only; never enable in production packaging.
+sparkle-poc = []
+
 [lib]
 name = "codex_reset"
 path = "src/lib.rs"

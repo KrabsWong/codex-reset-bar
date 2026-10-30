@@ -8,6 +8,7 @@
 #![cfg(target_os = "macos")]
 
 mod preferences;
+mod updater;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -55,6 +56,11 @@ thread_local! {
 }
 
 fn main() {
+    #[cfg(feature = "sparkle-poc")]
+    unsafe {
+        unsafe extern "C" { fn sparkle_poc_prepare(); }
+        sparkle_poc_prepare();
+    }
     let arguments: Vec<String> = std::env::args().collect();
     if arguments.iter().any(|argument| argument == "--self-test") {
         self_test();
@@ -67,6 +73,7 @@ fn main() {
         if arguments.iter().any(|arg| arg == "--dark") {
             app.setAppearance(NSAppearance::appearanceNamed(unsafe { NSAppearanceNameDarkAqua }).as_deref());
         }
+        updater::start();
         preferences::show();
         pump(0.5);
         preferences::snapshot(arguments.get(flag + 1).expect("snapshot path"));
@@ -109,7 +116,13 @@ fn main() {
         toggle_panel();
     }
 
+    updater::start();
     if arguments.iter().any(|arg| arg == "--settings") { preferences::show(); }
+    #[cfg(feature = "sparkle-poc")]
+    unsafe {
+        unsafe extern "C" { fn sparkle_poc_start(); }
+        sparkle_poc_start();
+    }
     app.run();
 }
 
@@ -217,6 +230,17 @@ fn show_context_menu(target: &Controller) {
         item
     };
     menu.addItem(&settings);
+    let updates = unsafe {
+        let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str(codex_reset::i18n::tr("Check for Updates…", "检查更新…")),
+            Some(sel!(checkForUpdates:)), ns_string!(""),
+        );
+        item.setTarget(Some(target));
+        item
+    };
+    updates.setEnabled(updater::can_check());
+    menu.addItem(&updates);
     menu.addItem(&NSMenuItem::separatorItem(mtm));
     // The controller implements quitApp: and lives for the entire status item's lifetime.
     let quit = unsafe {
@@ -782,6 +806,17 @@ define_class!(
             on_main(|| {
                 preferences::show();
             });
+        }
+
+        #[unsafe(method(checkForUpdates:))]
+        fn check_updates_action(&self, _sender: Option<&AnyObject>) {
+            on_main(updater::check);
+        }
+
+        #[unsafe(method(changeAutomaticUpdates:))]
+        fn automatic_updates_action(&self, sender: &objc2_app_kit::NSButton) {
+            updater::set_automatic(sender.state() == 1);
+            preferences::refresh();
         }
 
         #[unsafe(method(changeLanguage:))]

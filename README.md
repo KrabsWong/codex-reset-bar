@@ -41,14 +41,18 @@ On a first launch without saved state, the first successful response establishes
 The current distribution is for **Apple Silicon Macs (arm64)** running **macOS 14 or later**.
 
 1. Extract the distribution ZIP.
-2. Move `Codex Resets.app` to Applications.
+2. Use **Finder** to move `Codex Resets.app` to Applications.
 3. Open the app and look for its avatar in the menu bar.
 
 The app does not appear in the Dock. Click the avatar to toggle the popover; press Escape or click outside to dismiss it. Right-click (or Control-click) the avatar to see the app version and automatic refresh interval, or choose **Quit Codex Resets**. For automatic startup, add the app under **System Settings → General → Login Items**.
 
-When upgrading, quit the running app before replacing it in Applications. Version 0.1.0 has no Quit menu: open macOS Activity Monitor, find `CodexResets`, and quit that process first. Then replace the app and launch the new version.
+When upgrading manually, quit the running app before replacing it in Applications. Version 0.1.0 has no Quit menu: open macOS Activity Monitor, find `CodexResets`, and quit that process first. Then replace the app and launch the new version.
 
-Local packages use an ad-hoc signature and are not Developer ID signed or notarized.
+Local packages use an ad-hoc signature and are not Developer ID signed or notarized. If first opening is blocked, approve this app under **System Settings → Privacy & Security → Open Anyway**, then complete password or Touch ID confirmation. Opening from the download location can prevent updates; install using Finder first.
+
+Right-click the menu bar icon and choose **Check for Updates…**. Release builds check for updates daily by default; turn this off under **Settings → Automatically check for updates**. Sparkle shows the available update and asks before installation and restart. This preference is saved by Sparkle in macOS user defaults, separately from `settings.json`. Updates and the update feed are verified with the embedded Ed25519 public key.
+
+Users on older versions without Sparkle must install the first updater-enabled release manually. See [release setup](docs/releasing.md) for the permanent signing key and GitHub Actions configuration.
 
 ## Build from source
 
@@ -58,13 +62,14 @@ Requirements: macOS 14+, Xcode Command Line Tools, and a Rust toolchain supporti
 # Run from source.
 cargo run
 
-# Build a release app bundle and open it.
+# Build a release app bundle and open it (public key from release setup).
+export SPARKLE_PUBLIC_ED_KEY="<your permanent public key>"
 bash scripts/package.sh --run
 ```
 
-The packaging script generates the icons, builds the release executable, assembles `dist/Codex Resets.app`, and applies an ad-hoc signature. The binary architecture follows the Rust build target; the script does not create a universal binary.
+The packaging script downloads a checksum-pinned Sparkle SDK, generates the icons, builds the arm64 release executable, embeds Sparkle in `dist/Codex Resets.app`, and signs nested code and the app ad-hoc. Both version fields come from Cargo; the release workflow synchronizes Cargo to the `vX.Y.Z` tag in its build checkout. Source-only `cargo run` builds keep updates disabled; the packaged build enables them. On an Intel build host, install the `aarch64-apple-darwin` Rust target first.
 
-To create an Apple Silicon distribution archive after building on arm64:
+For a local ZIP only (official update releases must also be signed using the [release workflow](docs/releasing.md)):
 
 ```sh
 ditto -c -k --sequesterRsrc --keepParent \

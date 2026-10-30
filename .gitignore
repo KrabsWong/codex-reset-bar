@@ -6,5 +6,8 @@
 /dist
 /build
 
+# key
+sparkle_key
+
 # macOS
 .DS_Store

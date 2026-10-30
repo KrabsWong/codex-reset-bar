@@ -19,6 +19,8 @@ struct Preferences {
     avatar: Retained<NSImageView>,
     change: Retained<NSButton>,
     reset: Retained<NSButton>,
+    updates: Retained<NSButton>,
+    updates_hint: Retained<NSTextField>,
     _controller: Retained<Controller>,
 }
 
@@ -42,7 +44,7 @@ impl Preferences {
     fn new(mtm: MainThreadMarker) -> Self {
         let window = unsafe {
             NSWindow::initWithContentRect_styleMask_backing_defer(
-                NSWindow::alloc(mtm), rect(0.0, 0.0, 440.0, 254.0),
+                NSWindow::alloc(mtm), rect(0.0, 0.0, 440.0, 324.0),
                 NSWindowStyleMask::Titled | NSWindowStyleMask::Closable,
                 NSBackingStoreType::Buffered, false,
             )
@@ -50,24 +52,24 @@ impl Preferences {
         // The retained window is reused after closing, including its action target.
         unsafe { window.setReleasedWhenClosed(false) };
         window.center();
-        let content = NSBox::initWithFrame(NSBox::alloc(mtm), rect(0.0, 0.0, 440.0, 254.0));
+        let content = NSBox::initWithFrame(NSBox::alloc(mtm), rect(0.0, 0.0, 440.0, 324.0));
         content.setBoxType(NSBoxType::Custom);
         content.setBorderWidth(0.0);
         content.setFillColor(&NSColor::windowBackgroundColor());
         window.setContentView(Some(&content));
-        let group = NSBox::initWithFrame(NSBox::alloc(mtm), rect(20.0, 50.0, 400.0, 184.0));
+        let group = NSBox::initWithFrame(NSBox::alloc(mtm), rect(20.0, 50.0, 400.0, 254.0));
         group.setBoxType(NSBoxType::Custom);
         group.setCornerRadius(10.0);
         group.setBorderWidth(0.5);
         group.setBorderColor(&NSColor::separatorColor());
         group.setFillColor(&NSColor::controlBackgroundColor());
         content.addSubview(&group);
-        let divider = NSBox::initWithFrame(NSBox::alloc(mtm), rect(38.0, 168.0, 364.0, 1.0));
+        let divider = NSBox::initWithFrame(NSBox::alloc(mtm), rect(38.0, 238.0, 364.0, 1.0));
         divider.setBoxType(NSBoxType::Separator);
         content.addSubview(&divider);
         let target: Retained<Controller> = unsafe { msg_send![Controller::alloc(mtm), init] };
         let language = NSPopUpButton::initWithFrame_pullsDown(
-            NSPopUpButton::alloc(mtm), rect(194.0, 187.0, 208.0, 30.0), false,
+            NSPopUpButton::alloc(mtm), rect(194.0, 257.0, 208.0, 30.0), false,
         );
         let titles: Vec<_> = LANGUAGES.iter().map(|(_, name)| NSString::from_str(name)).collect();
         language.addItemsWithTitles(&NSArray::from_retained_slice(&titles));
@@ -76,25 +78,35 @@ impl Preferences {
             language.setAction(Some(sel!(changeLanguage:)));
         }
         content.addSubview(&language);
-        let language_label = label(mtm, rect(38.0, 192.0, 140.0, 20.0), 13.0, false);
-        let avatar_label = label(mtm, rect(100.0, 133.0, 280.0, 20.0), 13.0, false);
-        let avatar_hint = label(mtm, rect(100.0, 113.0, 290.0, 18.0), 11.0, true);
+        let language_label = label(mtm, rect(38.0, 262.0, 140.0, 20.0), 13.0, false);
+        let avatar_label = label(mtm, rect(100.0, 203.0, 280.0, 20.0), 13.0, false);
+        let avatar_hint = label(mtm, rect(100.0, 183.0, 290.0, 18.0), 11.0, true);
         let saved_hint = label(mtm, rect(24.0, 18.0, 392.0, 18.0), 11.0, true);
         for field in [&language_label, &avatar_label, &avatar_hint, &saved_hint] { content.addSubview(field); }
-        let avatar = NSImageView::initWithFrame(NSImageView::alloc(mtm), rect(38.0, 94.0, 48.0, 48.0));
+        let avatar = NSImageView::initWithFrame(NSImageView::alloc(mtm), rect(38.0, 164.0, 48.0, 48.0));
         content.addSubview(&avatar);
         let change = unsafe {
             NSButton::buttonWithTitle_target_action(ns_string!(""), Some(&target), Some(sel!(changeAvatar:)), mtm)
         };
-        change.setFrame(rect(94.0, 74.0, 144.0, 32.0));
+        change.setFrame(rect(94.0, 144.0, 144.0, 32.0));
         content.addSubview(&change);
         let reset = unsafe {
             NSButton::buttonWithTitle_target_action(ns_string!(""), Some(&target), Some(sel!(resetAvatar:)), mtm)
         };
-        reset.setFrame(rect(240.0, 74.0, 156.0, 32.0));
+        reset.setFrame(rect(240.0, 144.0, 156.0, 32.0));
         content.addSubview(&reset);
+        let updates_divider = NSBox::initWithFrame(NSBox::alloc(mtm), rect(38.0, 128.0, 364.0, 1.0));
+        updates_divider.setBoxType(NSBoxType::Separator);
+        content.addSubview(&updates_divider);
+        let updates = unsafe {
+            NSButton::checkboxWithTitle_target_action(ns_string!(""), Some(&target), Some(sel!(changeAutomaticUpdates:)), mtm)
+        };
+        updates.setFrame(rect(38.0, 94.0, 364.0, 22.0));
+        content.addSubview(&updates);
+        let updates_hint = label(mtm, rect(58.0, 70.0, 344.0, 18.0), 11.0, true);
+        content.addSubview(&updates_hint);
         Self { window, language, language_label, avatar_label, avatar_hint, saved_hint,
-            avatar, change, reset, _controller: target }
+            avatar, change, reset, updates, updates_hint, _controller: target }
     }
 
     fn refresh(&self) {
@@ -105,6 +117,14 @@ impl Preferences {
             (&self.avatar_hint, tr("Menu bar and popover", "显示在菜单栏和弹出面板中")),
             (&self.saved_hint, tr("Changes are saved automatically.", "更改会自动保存。")),
         ] { field.setStringValue(&NSString::from_str(value)); }
+        self.updates.setTitle(&NSString::from_str(tr("Automatically check for updates", "自动检查更新")));
+        self.updates.setEnabled(updater::available());
+        self.updates.setState(if updater::automatic() { 1 } else { 0 });
+        self.updates_hint.setStringValue(&NSString::from_str(if updater::available() {
+            tr("Checks daily. You choose when to install.", "每天检查，由你确认安装。")
+        } else {
+            tr("Updates are unavailable in this build.", "此构建暂不支持更新。")
+        }));
         self.change.setTitle(&NSString::from_str(tr("Choose Image…", "选择图片…")));
         self.reset.setTitle(&NSString::from_str(tr("Restore Default", "恢复默认")));
         if let Some(index) = LANGUAGES.iter().position(|(language, _)| *language == settings::language()) {
