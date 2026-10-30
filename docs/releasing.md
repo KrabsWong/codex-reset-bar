@@ -175,7 +175,9 @@ python3 scripts/test-updater.py --sdk build/sparkle/sdk
 ```
 
 It uses a temporary bundle and isolated preference domain; it checks controller
-startup and that automatic-check settings survive two relaunches. It does not
+startup, automatic-check settings across relaunches, and the real signed-feed
+reminder flow: scheduled discovery stays silent, an explicit action opens the
+Sparkle window, and dismissal clears the pending version. It does not
 replace the browser/Gatekeeper A -> B distribution test.
 
 ## Installation and Gatekeeper
@@ -192,6 +194,37 @@ B over A and restarted it, and B reopened normally. A shell-copy installation
 triggered App Translocation and Sparkle error 1005, so copying with a shell is
 not equivalent to testing Finder installation. These results do not confer
 Apple signing trust or guarantee all macOS versions behave identically.
+
+### Production v0.1.5 → v0.1.6 verification (2026-10-30)
+
+Passed on Apple Silicon, macOS 27.2 (26B123), using the public GitHub Releases
+feed and permanent release key. Both tags point to `9d5c5a9`; v0.1.6 changes
+the built version only. Its release workflow completed successfully.
+
+- The user downloaded v0.1.5 from GitHub in Chrome and installed it through
+  Finder over the existing app. Initial opening required the system security
+  approval flow. The installed app retained its Chrome quarantine attribute;
+  its executable SHA-256 matched the official v0.1.5 ZIP.
+- To exercise the automatic scheduler without waiting 24 hours, we quit the
+  app, saved its previous `SULastCheckTime`, set that timestamp two days back,
+  and reopened it. No manual Check for Updates action was used. Sparkle replaced
+  the test timestamp with the actual check time; the daily interval and
+  automatic-check setting were unchanged.
+- The user confirmed the v0.1.6 notification appeared automatically. After
+  accepting the update, the app quit and relaunched as v0.1.6, with no additional
+  Gatekeeper prompt, password, or Touch ID request.
+- Sparkle logs confirmed valid EdDSA signatures for both the appcast and ZIP.
+  The updated executable matched the official v0.1.6 ZIP, and deep/strict
+  codesign verification passed. Signing remained ad-hoc, with no Team ID.
+- The restarted process ran from `/Applications/Codex Resets.app`; another
+  normal quit/open also started successfully. Quarantine was absent after
+  Sparkle installation; no test command removed it or disabled Gatekeeper.
+
+Local evidence is in ignored `build/release-validation-v0.1.5-to-v0.1.6/`.
+This verifies this machine's upgrade flow, not every macOS version or a fresh
+machine's trust state. Sparkle also logged that this menu-bar app has no gentle
+reminder integration; the notification was visible in this test, but background
+update prompts may be less noticeable in other usage contexts.
 
 ## References
 

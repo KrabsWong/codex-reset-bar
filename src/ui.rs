@@ -4,7 +4,7 @@
 //! Layout (360 × 728): header, the latest reset, announced upcoming resets, compact statistics, the announcement history, and the API's
 //! attribution.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
@@ -42,6 +42,23 @@ static SHOW_FRAME: OnceLock<async_channel::Sender<Option<i64>>> = OnceLock::new(
 static OPEN: OnceLock<fn(&str)> = OnceLock::new();
 static CLOSE: OnceLock<fn()> = OnceLock::new();
 static AVATAR_EVENTS: OnceLock<async_channel::Sender<Option<Vec<u8>>>> = OnceLock::new();
+static UPDATE: OnceLock<fn()> = OnceLock::new();
+// Keep the latest value even before the lazy popover is mounted.
+static UPDATE_STATE: Mutex<(Option<String>, Option<async_channel::Sender<Option<String>>>)> = Mutex::new((None, None));
+pub fn set_update_handler(handler: fn()) { let _ = UPDATE.set(handler); }
+pub fn update_available(version: Option<String>) {
+    let mut state = UPDATE_STATE.lock().unwrap();
+    state.0 = version.clone();
+    if let Some(sender) = &state.1 { let _ = sender.try_send(version); }
+}
+fn show_update() {
+    close();
+    if let Some(handler) = UPDATE.get() { handler(); }
+}
+fn update_label(version: Option<String>) -> String {
+    format!("{} v{}", tr("Update to", "更新至"), version.unwrap_or_default())
+}
+
 pub fn avatar_changed(bytes: Option<Vec<u8>>) {
     if let Some(sender) = AVATAR_EVENTS.get() { let _ = sender.try_send(bytes); }
 }
@@ -115,6 +132,7 @@ struct State {
     /// shows that something happened.
     flash: Signal<bool>,
     avatar: Signal<String>,
+    update_version: Signal<Option<String>>,
 }
 
 #[component]
@@ -130,6 +148,12 @@ pub fn App() -> impl IntoElement {
     // What was read last time paints first: no empty panel, no waiting.
     let (settings_sender, settings_receiver) = async_channel::bounded(1);
     let _ = SETTINGS_EVENTS.set(settings_sender);
+    let (update_sender, update_receiver) = async_channel::unbounded();
+    let update_version = {
+        let mut update = UPDATE_STATE.lock().unwrap();
+        update.1 = Some(update_sender);
+        update.0.clone()
+    };
     let cached = cache::load();
     let now = format::now_epoch();
     let state = State {
@@ -151,7 +175,14 @@ pub fn App() -> impl IntoElement {
         pulse: signal(0.85_f32),
         flash: signal(false),
         avatar: signal(avatar_source(settings::load_avatar())),
+        update_version: signal(update_version),
     };
+
+    spawn(async move {
+        while let Ok(version) = update_receiver.recv().await {
+            state.update_version.set(version);
+        }
+    });
 
     spawn(async move {
         while settings_receiver.recv().await.is_ok() {
@@ -296,15 +327,29 @@ fn header(state: State) -> impl IntoElement {
         .pt(px(TOP))
         .pb(px(12.0))
         .child(
-            button()
+            view()
+                .relative()
                 .size(px(32.0))
-                .accessibility_label(move || Some(tr("Open Codex Resets website", "打开 Codex Resets 网站").into()))
-                .on_press(|| open(api::SITE))
-                .hover(|style| style.opacity(0.75))
                 .child(
-                    image(move || state.avatar.get())
+                    button()
                         .size(px(32.0))
-                        .rounded(px(16.0)),
+                        .accessibility_label(move || Some(if state.update_version.get().is_some() {
+                            update_label(state.update_version.get()).into()
+                        } else { tr("Open Codex Resets website", "打开 Codex Resets 网站").into() }))
+                        .on_press(move || {
+                            if state.update_version.get().is_some() { show_update(); }
+                            else { open(api::SITE); }
+                        })
+                        .hover(|style| style.opacity(0.75))
+                        .child(image(move || state.avatar.get()).size(px(32.0)).rounded(px(16.0)))
+                        .child(when(move || state.update_version.get().is_some(), move || {
+                            view().absolute().bottom(px(-3.0)).right(px(-3.0))
+                                .size(px(18.0)).rounded(px(9.0))
+                                .items_center().justify_center().bg(rgb(0x1f6ee8))
+                                .tooltip(tooltip().child(text(move || update_label(state.update_version.get()))))
+                                .child(text("↑").text_size(px(14.0)).font_weight(FontWeight::BOLD)
+                                    .text_color(rgb(0xffffff)))
+                        })),
                 ),
         )
         .child(

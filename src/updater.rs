@@ -3,6 +3,8 @@
 mod native {
     unsafe extern "C" {
         pub fn codex_updater_start() -> bool;
+        pub fn codex_updater_set_handler(handler: extern "C" fn(*const std::ffi::c_char));
+        pub fn codex_updater_version() -> *const std::ffi::c_char;
         pub fn codex_updater_available() -> bool;
         pub fn codex_updater_can_check() -> bool;
         pub fn codex_updater_check();
@@ -14,6 +16,7 @@ mod native {
 pub fn start() {
     #[cfg(feature = "sparkle")]
     unsafe {
+        native::codex_updater_set_handler(changed);
         native::codex_updater_start();
     }
 }
@@ -54,4 +57,31 @@ pub fn set_automatic(enabled: bool) {
     }
     #[cfg(not(feature = "sparkle"))]
     let _ = enabled;
+}
+
+#[cfg(feature = "sparkle")]
+extern "C" fn changed(value: *const std::ffi::c_char) {
+    let version = if value.is_null() { None } else {
+        Some(unsafe { std::ffi::CStr::from_ptr(value) }.to_string_lossy().into_owned())
+    };
+    codex_reset::update_available(version);
+    super::refresh_update_badge();
+}
+
+pub fn version() -> Option<String> {
+    #[cfg(feature = "sparkle")]
+    unsafe {
+        let value = native::codex_updater_version();
+        if !value.is_null() {
+            return Some(std::ffi::CStr::from_ptr(value).to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+pub fn menu_title() -> String {
+    match version() {
+        Some(version) => format!("{} v{version}…", codex_reset::i18n::tr("Update to", "更新至")),
+        None => codex_reset::i18n::tr("Check for Updates…", "检查更新…").to_owned(),
+    }
 }

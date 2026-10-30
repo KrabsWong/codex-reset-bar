@@ -94,6 +94,10 @@ fn main() {
             .and_then(|value| value.parse().ok())
             .unwrap_or(4.0);
         let dark = arguments.iter().any(|argument| argument == "--dark");
+        // Preview a reminder without touching the real updater or preferences.
+        if let Some(index) = arguments.iter().position(|arg| arg == "--update-preview") {
+            codex_reset::update_available(arguments.get(index + 1).cloned());
+        }
         snapshot(&path, wait, dark);
         return;
     }
@@ -105,6 +109,7 @@ fn main() {
 
     codex_reset::set_open_handler(open_external);
     codex_reset::set_close_handler(close_panel);
+    codex_reset::set_update_handler(|| on_main(updater::check));
 
     MENU.with(|slot| *slot.borrow_mut() = Some(menu_bar(mtm)));
     codex_reset::monitor::start(update_badge);
@@ -233,7 +238,7 @@ fn show_context_menu(target: &Controller) {
     let updates = unsafe {
         let item = NSMenuItem::initWithTitle_action_keyEquivalent(
             NSMenuItem::alloc(mtm),
-            &NSString::from_str(codex_reset::i18n::tr("Check for Updates…", "检查更新…")),
+            &NSString::from_str(&updater::menu_title()),
             Some(sel!(checkForUpdates:)), ns_string!(""),
         );
         item.setTarget(Some(target));
@@ -275,6 +280,7 @@ fn update_badge(badge: codex_reset::monitor::Badge) {
             let custom = codex_reset::settings::load_avatar();
             if let Some(image) = NSImage::initWithData(NSImage::alloc(), &NSData::with_bytes(custom.as_deref().unwrap_or(bytes))) {
                 let image = if custom.is_some() { avatar_badge(&image, badge) } else { image };
+                let image = if updater::version().is_some() { update_arrow(&image) } else { image };
                 image.setSize(NSSize::new(18.0, 18.0));
                 image.setTemplate(false);
                 button.setImage(Some(&image));
@@ -284,6 +290,34 @@ fn update_badge(badge: codex_reset::monitor::Badge) {
             }
         });
     });
+}
+
+/// Sparkle delivers changes on the main thread; redraw without replacing reset state.
+#[cfg(feature = "sparkle")]
+fn refresh_update_badge() {
+    let badge = MENU.with(|slot| slot.borrow().as_ref().map(|menu| menu.badge.get()));
+    if let Some(badge) = badge { update_badge(badge); }
+}
+
+/// Upper-left arrow leaves the lower-right reset indicator visible.
+#[allow(deprecated)]
+fn update_arrow(source: &NSImage) -> Retained<NSImage> {
+    let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(18.0, 18.0));
+    image.lockFocus();
+    source.drawInRect(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(18.0, 18.0)));
+    NSColor::colorWithSRGBRed_green_blue_alpha(0.12, 0.43, 0.91, 1.0).setFill();
+    NSBezierPath::bezierPathWithOvalInRect(NSRect::new(NSPoint::new(0.0, 9.0), NSSize::new(9.0, 9.0))).fill();
+    NSColor::whiteColor().setStroke();
+    let arrow = NSBezierPath::bezierPath();
+    arrow.setLineWidth(1.25);
+    arrow.moveToPoint(NSPoint::new(4.5, 10.8));
+    arrow.lineToPoint(NSPoint::new(4.5, 15.8));
+    arrow.moveToPoint(NSPoint::new(2.3, 13.6));
+    arrow.lineToPoint(NSPoint::new(4.5, 15.8));
+    arrow.lineToPoint(NSPoint::new(6.7, 13.6));
+    arrow.stroke();
+    image.unlockFocus();
+    image
 }
 
 /// Import a local image once; both surfaces use the same normalized PNG.
