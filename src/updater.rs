@@ -81,7 +81,7 @@ pub fn version() -> Option<String> {
 
 pub fn menu_title() -> String {
     match version() {
-        Some(version) => format!("{} v{version}…", codex_reset::i18n::tr("Update to", "更新至")),
+        Some(version) => format!("{} v{version}", codex_reset::i18n::tr("Update to", "更新至")),
         None => codex_reset::i18n::tr("Check for Updates…", "检查更新…").to_owned(),
     }
 }

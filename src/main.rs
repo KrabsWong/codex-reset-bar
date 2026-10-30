@@ -299,22 +299,22 @@ fn refresh_update_badge() {
     if let Some(badge) = badge { update_badge(badge); }
 }
 
-/// Upper-left arrow leaves the lower-right reset indicator visible.
+/// Match the panel's lower-right corner; updates take priority over reset dots.
 #[allow(deprecated)]
 fn update_arrow(source: &NSImage) -> Retained<NSImage> {
     let image = NSImage::initWithSize(NSImage::alloc(), NSSize::new(18.0, 18.0));
     image.lockFocus();
     source.drawInRect(NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(18.0, 18.0)));
     NSColor::colorWithSRGBRed_green_blue_alpha(0.12, 0.43, 0.91, 1.0).setFill();
-    NSBezierPath::bezierPathWithOvalInRect(NSRect::new(NSPoint::new(0.0, 9.0), NSSize::new(9.0, 9.0))).fill();
+    NSBezierPath::bezierPathWithOvalInRect(NSRect::new(NSPoint::new(9.0, 0.0), NSSize::new(9.0, 9.0))).fill();
     NSColor::whiteColor().setStroke();
     let arrow = NSBezierPath::bezierPath();
     arrow.setLineWidth(1.25);
-    arrow.moveToPoint(NSPoint::new(4.5, 10.8));
-    arrow.lineToPoint(NSPoint::new(4.5, 15.8));
-    arrow.moveToPoint(NSPoint::new(2.3, 13.6));
-    arrow.lineToPoint(NSPoint::new(4.5, 15.8));
-    arrow.lineToPoint(NSPoint::new(6.7, 13.6));
+    arrow.moveToPoint(NSPoint::new(13.5, 1.8));
+    arrow.lineToPoint(NSPoint::new(13.5, 6.8));
+    arrow.moveToPoint(NSPoint::new(11.3, 4.6));
+    arrow.lineToPoint(NSPoint::new(13.5, 6.8));
+    arrow.lineToPoint(NSPoint::new(15.7, 4.6));
     arrow.stroke();
     image.unlockFocus();
     image
