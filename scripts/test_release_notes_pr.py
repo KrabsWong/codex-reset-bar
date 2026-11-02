@@ -25,6 +25,46 @@ class ReleasePRTests(unittest.TestCase):
                        base=dict(ref='main', repo={'full_name': release.REPO}), merge_commit_sha='c' * 40)
         self.event = dict(issue={'number': 7}, comment=dict(id=10, body='/release-notes approve ' + self.head, user={'login': 'maintainer'}))
 
+    def test_manual_release_creates_tag_and_opens_pr_in_same_run(self):
+        with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/main'}), \
+             patch.object(review, 'github_release', return_value={'tag_name': 'v0.1.0'}), \
+             patch.object(review, 'api', side_effect=[None, {}]) as api, \
+             patch.object(review, 'git', return_value=self.commit) as git, \
+             patch.object(review.subprocess, 'run') as run, \
+             patch.object(review, 'open_pr') as opened:
+            review.start_release('v0.2.0')
+        self.assertEqual(api.call_args.args, ('git/refs', {'ref': 'refs/tags/v0.2.0', 'sha': self.commit}))
+        self.assertIn('merge-base', run.call_args.args[0])
+        self.assertEqual(git.call_args_list[-2].args, (review.ROOT, 'fetch', 'origin', 'refs/tags/v0.2.0:refs/tags/v0.2.0'))
+        self.assertEqual(git.call_args.args, (review.ROOT, 'checkout', '--detach', 'refs/tags/v0.2.0'))
+        opened.assert_called_once_with('v0.2.0')
+
+    def test_manual_retry_reuses_original_tag_without_creating_or_moving_it(self):
+        with patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/main'}), \
+             patch.object(review, 'github_release', return_value=None), \
+             patch.object(review, 'api', return_value={'object': {'sha': self.commit}}) as api, \
+             patch.object(review, 'git') as git, \
+             patch.object(review, 'open_pr') as opened:
+            review.start_release('v0.2.0')
+        api.assert_called_once_with('git/ref/tags/v0.2.0', missing=True)
+        self.assertEqual(git.call_count, 2)
+        opened.assert_called_once_with('v0.2.0')
+
+    def test_manual_release_rejects_bad_version_branch_and_published_version(self):
+        for tag, ref, latest in [('v0.2.0;echo bad', 'refs/heads/main', None),
+                                 ('v0.2.0', 'refs/heads/feature/test', None),
+                                 ('v0.2.0', 'refs/heads/main', {'tag_name': 'v0.2.0'}),
+                                 ('v0.2.0', 'refs/heads/main', {'tag_name': 'v0.3.0'})]:
+            with self.subTest(tag=tag, ref=ref, latest=latest), \
+                 patch.dict(os.environ, {'GITHUB_REF': ref}), \
+                 patch.object(review, 'github_release', return_value=latest), \
+                 patch.object(review, 'api') as api, \
+                 patch.object(review, 'open_pr') as opened:
+                with self.assertRaises(ValueError):
+                    review.start_release(tag)
+                api.assert_not_called()
+                opened.assert_not_called()
+
     def test_commands_are_exact_and_revision_requires_feedback(self):
         self.assertEqual(review.command('/release-notes approve ' + self.head), ('approve', self.head))
         self.assertEqual(review.command('/release-notes revise 请简化描述'), ('revise', '请简化描述'))

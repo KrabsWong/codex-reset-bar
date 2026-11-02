@@ -168,7 +168,15 @@ References: [Go](https://opencode.ai/v2/docs/console/go/),
 
 ### For each release
 
-1. Push a new stable `vMAJOR.MINOR.PATCH` tag pointing to a commit already on main.
+1. Open **Actions → Release macOS app → Run workflow**, select **main**, and
+   enter a new stable tag such as `v0.1.10` in **version**. Click **Run workflow**.
+   The workflow creates the tag at the main commit selected for that run and
+   generates the notes PR in the same run; no local commands are needed.
+   Only main is allowed, and the version must be newer than the latest release.
+   Retrying the same version reuses its original tag and existing PR without
+   moving the tag or overwriting edits. A failed run may leave a tag; retry the
+   same version to finish creating its PR. Manual dispatch does not publish.
+   Pushing a tag on main yourself remains supported as an alternative.
 2. **Release macOS app → notes-pr** compares the previous latest published
    release with that tag, asks OpenCode to produce the summary, and creates a
    `release-notes/<tag>` branch and PR changing only `release-notes/<tag>.md`.

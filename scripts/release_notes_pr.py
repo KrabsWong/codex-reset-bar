@@ -101,6 +101,26 @@ def write_notes(branch, tag, summary, sha=None):
     return api(f'contents/release-notes/{tag}.md', data, 'PUT')
 
 
+def start_release(tag):
+    """Create an immutable tag, then draft in this run (bot tags do not trigger CI)."""
+    version_tuple(tag)
+    if os.environ.get('GITHUB_REF') != 'refs/heads/main':
+        raise ValueError('Manual releases must run from main')
+    latest = github_release('latest')
+    if latest and version_tuple(latest['tag_name']) >= version_tuple(tag):
+        raise ValueError('Release version must be newer than latest')
+    ref = api(f'git/ref/tags/{tag}', missing=True)
+    if ref is None:
+        commit = git(ROOT, 'rev-parse', 'HEAD')
+        subprocess.run(['git', 'merge-base', '--is-ancestor', commit, 'refs/remotes/origin/main'],
+                       cwd=ROOT, check=True, capture_output=True)
+        api('git/refs', dict(ref='refs/tags/' + tag, sha=commit))
+    # Retries reuse the original tag even if main has advanced. Never move a tag.
+    git(ROOT, 'fetch', 'origin', f'refs/tags/{tag}:refs/tags/{tag}')
+    git(ROOT, 'checkout', '--detach', f'refs/tags/{tag}')
+    open_pr(tag)
+
+
 def open_pr(tag):
     commit = validate_tag(ROOT, tag)
     branch = 'release-notes/' + tag
@@ -226,12 +246,14 @@ def export_approved(number, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['open', 'comment', 'export'])
+    parser.add_argument('action', choices=['start', 'open', 'comment', 'export'])
     parser.add_argument('--tag')
     parser.add_argument('--pr', type=int)
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
-    if args.action == 'open':
+    if args.action == 'start':
+        start_release(args.tag)
+    elif args.action == 'open':
         open_pr(args.tag)
     elif args.action == 'comment':
         comment(json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text()))
