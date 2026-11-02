@@ -72,9 +72,12 @@ class VersionTests(unittest.TestCase):
             api.assert_not_called()
 
     def test_create_merge_tag_and_notes_run_in_order_and_resume_merged_pr(self):
-        for resume in (False, True):
+        for resume, request, advanced in ((False, False, False), (True, False, False),
+                                           (False, True, False), (True, True, False),
+                                           (False, True, True), (True, True, True)):
             base, head, merged = 'a'*40, 'b'*40, 'c'*40
             data = dict(tag='v0.1.11', previous='v0.1.10', base=base, run='123')
+            if request: data['request'] = 'release/patch/test-1'
             pr = dict(number=9, state='closed' if resume else 'open', merged=resume,
                       merge_commit_sha=merged, mergeable_state='clean',
                       body=marker('codex-version', data), head={'sha': head})
@@ -85,22 +88,30 @@ class VersionTests(unittest.TestCase):
                 if endpoint.startswith('pulls?'): return [pr] if resume else []
                 if endpoint == 'git/ref/tags/v0.1.11': return {'object': {'sha': merged}} if resume else None
                 if endpoint == 'git/ref/heads/main': return {'object': {'sha': base}}
+                if endpoint == 'git/commits/' + merged: return {'parents': [{'sha': 'f'*40 if advanced else base}, {'sha': head}]}
                 if endpoint == 'git/commits/' + base: return {'tree': {'sha': 'd'*40}}
                 if endpoint == 'git/trees': return {'sha': 'e'*40}
                 if endpoint == 'git/commits': return {'sha': head}
                 if endpoint in ('pulls', 'pulls/9'): return pr
                 if endpoint == 'pulls/9/merge': return {'merged': True, 'sha': merged}
                 return {}
-            with self.subTest(resume=resume), patch.dict(os.environ, {'GITHUB_REF': 'refs/heads/main', 'GITHUB_RUN_ID': '123'}), \
+            with self.subTest(resume=resume, request=request, advanced=advanced), patch.dict(os.environ, {'GITHUB_REF': 'refs/tags/release/patch/test-1' if request else 'refs/heads/main', 'GITHUB_RUN_ID': '123'}), \
                  patch.object(version, 'github_release', return_value={'tag_name': 'v0.1.10'}), \
                  patch.object(version, 'pages', return_value=[]), \
                  patch.object(version, 'api', side_effect=api), \
-                 patch.object(version, 'git', return_value='expected') as git, \
+                 patch.object(version, 'git', side_effect=lambda root, *args: base if args[0] == 'rev-parse' else 'expected') as git, \
+                 patch('subprocess.run'), \
                  patch.object(version, 'version_files', return_value={f: 'expected\n' for f in version.FILES}), \
                  patch.object(version, 'validate_version_pr', return_value={f: 'expected\n' for f in version.FILES}), \
                  patch.object(version, 'refresh_gate') as gate, \
                  patch.object(version, 'open_pr') as notes:
-                version.start('patch')
+                if advanced:
+                    with self.assertRaisesRegex(ValueError, 'outside the release request'):
+                        version.start(request_tag='release/patch/test-1')
+                    notes.assert_not_called()
+                    self.assertFalse(any(c[0] == 'git/refs' and c[1]['ref'].startswith('refs/tags/') for c in calls))
+                    continue
+                version.start(request_tag='release/patch/test-1') if request else version.start('patch')
             notes.assert_called_once_with('v0.1.11')
             self.assertEqual(git.call_args.args, (version.ROOT, 'checkout', '--detach', 'v0.1.11'))
             if resume:
@@ -168,3 +179,36 @@ class VersionTests(unittest.TestCase):
              patch('subprocess.run'):
             self.assertEqual(version.validate_version_pr(pr, data), expected)
         files.assert_called_once_with(data['base'], data['tag'])
+
+    def test_request_tag_level_and_invalid_names(self):
+        for level in ('patch', 'minor', 'major'):
+            self.assertEqual(version.request_level(f'release/{level}/20261102-1'), level)
+        for name in ('v0.1.11', 'release/patch', 'release/patch/', 'release/other/1', 'release/patch/a/b', 'release/patch/a;echo'):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                version.request_level(name)
+
+    def test_request_tag_must_match_event_and_be_on_main(self):
+        with patch.dict(os.environ, {'GITHUB_REF': 'refs/tags/release/minor/test'}), patch.object(version, 'api') as api:
+            with self.assertRaisesRegex(ValueError, 'triggering tag'):
+                version.start(request_tag='release/patch/test')
+            api.assert_not_called()
+        with patch.dict(os.environ, {'GITHUB_REF': 'refs/tags/release/patch/test'}), \
+             patch.object(version, 'git', return_value='a'*40), \
+             patch('subprocess.run', side_effect=subprocess.CalledProcessError(1, 'git')), \
+             patch.object(version, 'api') as api:
+            with self.assertRaises(subprocess.CalledProcessError):
+                version.start(request_tag='release/patch/test')
+            api.assert_not_called()
+
+    def test_stale_main_request_tag_stops_before_creating_version(self):
+        def api(endpoint, *args, **kwargs):
+            if endpoint == 'git/matching-refs/tags/v' or endpoint.startswith('pulls?'): return []
+            if endpoint == 'git/ref/tags/v0.1.11': return None
+            if endpoint == 'git/ref/heads/main': return {'object': {'sha': 'b'*40}}
+            self.fail('Unexpected mutation: ' + endpoint)
+        with patch.dict(os.environ, {'GITHUB_REF': 'refs/tags/release/patch/test', 'GITHUB_RUN_ID': '123'}), \
+             patch.object(version, 'git', return_value='a'*40), patch('subprocess.run'), \
+             patch.object(version, 'github_release', return_value={'tag_name': 'v0.1.10'}), \
+             patch.object(version, 'pages', return_value=[]), patch.object(version, 'api', side_effect=api):
+            with self.assertRaisesRegex(ValueError, 'current main'):
+                version.start(request_tag='release/patch/test')

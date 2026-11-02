@@ -169,8 +169,31 @@ References: [Go](https://opencode.ai/v2/docs/console/go/),
 
 ### For each release
 
-1. Open **Actions → Release macOS app → Run workflow**, select **main**, and
-   choose **level**: `patch`, `minor`, or `major` (default: `patch`). The baseline
+1. Push a release-request tag on the latest main commit. Its format is
+   `release/<patch|minor|major>/<unique-id>`, for example:
+
+   ```sh
+   git switch main
+   git pull --ff-only origin main
+   git tag release/patch/20261102-1
+   git push origin refs/tags/release/patch/20261102-1
+   ```
+
+   Use a fresh identifier for each request; never move or reuse an existing tag.
+   Replace `patch` with `minor` or `major` for the other increment levels. The push
+   starts Actions automatically: **Run workflow is not required**. A local tag
+   alone does not trigger GitHub until pushed. Follow the repository's outgoing
+   history secret-scan policy before pushing.
+
+   The request tag must initially point at current main, and its source must be
+   in main's ancestry. Requests from feature branches or stale main commits fail.
+   Request tags remain as history; they are not application version numbers.
+   The workflow checks out trusted main scripts for request processing. It creates
+   the final `vX.Y.Z` tag only after the version PR merges. Changes to main during
+   preparation stop automatic merging; inspect the version PR before retrying.
+
+   As a fallback, **Actions → Release macOS app → Run workflow** still accepts
+   a **level** selection on **main** (`patch` by default). The baseline
    is the latest published release, not the old version in the checkout.
    For `v0.1.10`, these produce `v0.1.11`, `v0.2.0`, and `v1.0.0` respectively.
    With no previous release, the baseline is `v0.0.0`.
@@ -200,7 +223,8 @@ References: [Go](https://opencode.ai/v2/docs/console/go/),
    inspect and remove that unused branch before retrying.
 
    Explicit tag pushes remain a compatibility path and generate notes directly;
-   use the Actions level selector for automatic version updates to main.
+   use a release-request tag or the Actions level selector for automatic version
+   updates to main.
 2. **Release macOS app → notes-pr** compares the previous latest published
    release with that tag, asks OpenCode to produce the summary, and creates a
    `release-notes/<tag>` branch and PR changing only `release-notes/<tag>.md`.
