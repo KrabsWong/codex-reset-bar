@@ -37,7 +37,8 @@ def api(endpoint, data=None, method=None, missing=False):
 def pages(endpoint):
     result = []
     for page in range(1, 101):
-        rows = api(f'{endpoint}?per_page=100&page={page}')
+        separator = '&' if '?' in endpoint else '?'
+        rows = api(f'{endpoint}{separator}per_page=100&page={page}')
         result.extend(rows)
         if len(rows) < 100:
             return result

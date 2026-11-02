@@ -170,14 +170,37 @@ References: [Go](https://opencode.ai/v2/docs/console/go/),
 ### For each release
 
 1. Open **Actions → Release macOS app → Run workflow**, select **main**, and
-   enter a new stable tag such as `v0.1.10` in **version**. Click **Run workflow**.
-   The workflow creates the tag at the main commit selected for that run and
-   generates the notes PR in the same run; no local commands are needed.
-   Only main is allowed, and the version must be newer than the latest release.
-   Retrying the same version reuses its original tag and existing PR without
-   moving the tag or overwriting edits. A failed run may leave a tag; retry the
-   same version to finish creating its PR. Manual dispatch does not publish.
-   Pushing a tag on main yourself remains supported as an alternative.
+   choose **level**: `patch`, `minor`, or `major` (default: `patch`). The baseline
+   is the latest published release, not the old version in the checkout.
+   For `v0.1.10`, these produce `v0.1.11`, `v0.2.0`, and `v1.0.0` respectively.
+   With no previous release, the baseline is `v0.0.0`.
+
+   The workflow creates a `release-version/<tag>` PR updating only the root
+   package versions in `Cargo.toml` and `Cargo.lock`. It verifies the exact file
+   contents and file list, records **Release version validation**, refreshes the
+   existing required check, then automatically merges that version-only PR
+   through GitHub's normal merge API. It does not bypass branch rules. Additional
+   required checks/reviews can block it; inspect the PR and retry after resolving
+   them. No dependency versions are upgraded.
+
+   A tag is created at the version PR's merge commit, so main and the tagged
+   source both contain the new version. The same run generates the notes PR;
+   GitHub-token merges and tags do not trigger another run automatically.
+   **Only the version PR is automatically merged; notes still require your
+   explicit approval and manual merge.**
+
+   Finish an existing notes PR before starting another release. Different pending
+   version PRs or unpublished newer tags also block preparation. Before publication,
+   rerunning the original Actions run resumes its managed version PR, including
+   after its merge. Tags are never moved. Each run is bound to its version PR by
+   the Actions run ID. After publication,
+   rerunning that run does not increment again; start a new run for the next version.
+   A new run cannot take over another run’s version PR; retry the original run.
+   A failure before the version PR is created can leave a preparation branch;
+   inspect and remove that unused branch before retrying.
+
+   Explicit tag pushes remain a compatibility path and generate notes directly;
+   use the Actions level selector for automatic version updates to main.
 2. **Release macOS app → notes-pr** compares the previous latest published
    release with that tag, asks OpenCode to produce the summary, and creates a
    `release-notes/<tag>` branch and PR changing only `release-notes/<tag>.md`.
@@ -244,14 +267,16 @@ publication without matching approval. Follow the acknowledgement-before-merge s
 Do not merge through another workflow's `GITHUB_TOKEN`, since that merge may not
 trigger the publication workflow; merge as a user. Closing without merging does
 not publish. To replace a closed, unmerged draft for an unpublished version, first
-remove its old `release-notes/<tag>` branch, then dispatch the same version again.
+remove its old `release-notes/<tag>` branch, then rerun the original preparation
+run (for versions created with the level selector). The level selector is intended to prepare versions, not reset tags.
 The workflow generates fresh notes in a new PR with a pending approval status.
 It refuses to reuse merged notes, an existing release, or a leftover draft branch.
 
 If the unpublished tag must also include newer main code, explicitly remove that
-old tag before dispatching again. Merge any workflow fixes into main first. The
-new run creates the missing tag at its main commit; it never moves existing tags
-automatically. Never delete/recreate tags for a distributed version.
+old tag and its version-preparation branch/PR state only after checking the
+release history. This is an exceptional manual recovery, not a level-selector
+operation. Normal retries retain the original version PR merge commit.
+Never delete/recreate tags for a distributed version.
 
 Retry failed builds with **Re-run failed jobs**. Re-running tag creation reuses an
 existing open PR and never overwrites edits.
