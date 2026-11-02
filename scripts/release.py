@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO = 'KrabsWong/codex-reset-bar'
 FEED_URL = f'https://github.com/{REPO}/releases/latest/download/appcast.xml'
 SPARKLE = 'http://www.andymatuschak.org/xml-namespaces/sparkle'
+DEFAULT_RELEASE_SUMMARY = 'Fixed some known issues.\n'
 
 
 def run(*args, **kwargs):
@@ -59,7 +60,62 @@ def asset_paths(tag):
     return ROOT / f'dist/Codex-Resets-{tag[1:]}-macOS-arm64.zip', ROOT / 'dist/appcast.xml'
 
 
+def load_release_summary(tag, root=ROOT):
+    """Use the CI artifact when supplied, otherwise optional locally authored notes."""
+    version_tuple(tag)
+    override = os.environ.get('RELEASE_SUMMARY_FILE')
+    path = Path(override) if override else root / 'release-notes' / f'{tag}.md'
+    try:
+        summary = path.read_text(encoding='utf-8').strip()
+    except (OSError, UnicodeError):
+        return DEFAULT_RELEASE_SUMMARY
+    if not summary:
+        return DEFAULT_RELEASE_SUMMARY
+    return validate_release_summary(summary)
+
+
+def validate_release_summary(summary):
+    summary = summary.strip()
+    if summary == DEFAULT_RELEASE_SUMMARY.strip():
+        return DEFAULT_RELEASE_SUMMARY
+    sections = set()
+    section = None
+    has_items = False
+    for line in summary.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if re.search(r'\b(TODO|TBD|FIXME)\b|待填写|待补充', line, re.IGNORECASE):
+            raise ValueError('Release summary contains a placeholder')
+        if line.startswith('## '):
+            if section and not has_items:
+                raise ValueError('Release summary contains an empty section')
+            section = line[3:]
+            if section not in ('New Features', 'Bug Fixes', 'Improvements') or section in sections:
+                raise ValueError('Release summary requires unique New Features / Bug Fixes / Improvements sections')
+            sections.add(section)
+            has_items = False
+        elif section and line.startswith('- ') and line[2:].strip():
+            has_items = True
+        else:
+            raise ValueError('Release summary must contain category headings and one-line bullet items')
+    if not has_items:
+        raise ValueError('Release summary must contain at least one item and no empty sections')
+    return summary + '\n'
+
+
+def embedded_release_notes(tag, summary):
+    return (f'# Codex Resets {tag[1:]}\n\n{summary}\n'
+            f'[View full release notes](https://github.com/{REPO}/releases/tag/{tag})\n')
+
+
+def add_release_summary(item, tag, summary):
+    ET.SubElement(item, 'description', {f'{{{SPARKLE}}}format': 'markdown'}).text = embedded_release_notes(tag, summary)
+    ET.SubElement(item, f'{{{SPARKLE}}}fullReleaseNotesLink').text = f'https://github.com/{REPO}/releases/tag/{tag}'
+
+
 def prepare(tag, sdk):
+    summary = load_release_summary(tag, ROOT)
     app = ROOT / 'dist/Codex Resets.app'
     info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
     public_key = os.environ.get('SPARKLE_PUBLIC_ED_KEY', '').strip()
@@ -101,6 +157,7 @@ print(key.publicKey.rawRepresentation.base64EncodedString())
     item = ET.SubElement(channel, 'item')
     ET.SubElement(item, 'title').text = f'Codex Resets {tag[1:]}'
     ET.SubElement(item, 'link').text = f'https://github.com/{REPO}/releases/tag/{tag}'
+    add_release_summary(item, tag, summary)
     ET.SubElement(item, f'{{{SPARKLE}}}version').text = tag[1:]
     ET.SubElement(item, f'{{{SPARKLE}}}shortVersionString').text = tag[1:]
     ET.SubElement(item, f'{{{SPARKLE}}}minimumSystemVersion').text = info['LSMinimumSystemVersion']
@@ -124,12 +181,12 @@ def github_release(endpoint):
 
 
 def generate_release_notes(tag, previous_tag, root=ROOT):
-    """List every commit since the previous published release, including merged work."""
+    """Combine the reviewed summary with every commit since the previous release."""
     version_tuple(tag)
     target = run('git', 'rev-parse', '--verify', f'refs/tags/{tag}^{{commit}}',
                  cwd=root, capture_output=True, text=True).stdout.strip()
     revision = target
-    lines = [f'# Codex Resets {tag[1:]}', '',
+    lines = [f'# Codex Resets {tag[1:]}', '', load_release_summary(tag, root).rstrip(), '',
              f'Release commit: [{target}](https://github.com/{REPO}/commit/{target})', '']
     if previous_tag:
         version_tuple(previous_tag)
@@ -162,7 +219,17 @@ def publish(tag):
     archive, feed = asset_paths(tag)
     if not archive.is_file() or not feed.is_file():
         raise ValueError('Both signed release assets must exist before publication')
+    summary = load_release_summary(tag, ROOT)
+    item = ET.parse(feed).find('./channel/item')
+    description = item.find('description') if item is not None else None
+    if (description is None or description.get(f'{{{SPARKLE}}}format') != 'markdown'
+            or description.text != embedded_release_notes(tag, summary)
+            or item.findtext(f'{{{SPARKLE}}}version') != tag[1:]):
+        raise ValueError('Signed appcast does not match release summary/version; prepare and sign again')
     latest = github_release('latest')
+    expected_previous = os.environ.get('RELEASE_PREVIOUS_TAG')
+    if expected_previous is not None and (latest['tag_name'] if latest else '') != expected_previous:
+        raise ValueError('Latest release changed since notes approval; publication stopped')
     if latest and version_tuple(latest['tag_name']) >= version_tuple(tag):
         raise ValueError('Refusing to replace latest with the same or an older release')
     release = github_release('tags/' + tag)

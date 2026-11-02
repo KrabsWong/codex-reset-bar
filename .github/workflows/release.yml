@@ -3,28 +3,102 @@ name: Release macOS app
 on:
   push:
     tags: ['v[0-9]*.[0-9]*.[0-9]*']
+  pull_request:
+    types: [closed]
+    branches: [main]
 
 permissions:
-  contents: write
-
-# Serialize publication so an older build cannot race a newer latest release.
-concurrency:
-  group: macos-release
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  release:
-    runs-on: macos-15
-    timeout-minutes: 30
-    env:
-      MACOSX_DEPLOYMENT_TARGET: '14.0'
-      SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
-      RELEASE_TAG: ${{ github.ref_name }}
+  notes-pr:
+    concurrency:
+      group: release-notes-${{ github.ref_name }}
+      cancel-in-progress: false
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
           fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned OpenCode CLI
+        continue-on-error: true
+        timeout-minutes: 3
+        run: npm install --global opencode-ai@1.19.5
+      - name: Generate notes and open review PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
+        run: python3 scripts/release_notes_pr.py open --tag "$GITHUB_REF_NAME"
+
+  approved-notes:
+    if: >-
+      github.event_name == 'pull_request' && github.event.pull_request.merged == true &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.event.pull_request.head.ref, 'release-notes/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      tag: ${{ steps.approved.outputs.tag }}
+      commit: ${{ steps.approved.outputs.commit }}
+      previous: ${{ steps.approved.outputs.previous }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify approval and export merged notes
+        id: approved
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 scripts/release_notes_pr.py export --pr "$PR_NUMBER" --output "$RUNNER_TEMP/release-summary/summary.md"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-summary
+          path: ${{ runner.temp }}/release-summary/summary.md
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    # Unrelated closed PRs must not occupy or cancel a pending publication.
+    concurrency:
+      group: macos-release
+      cancel-in-progress: false
+    needs: approved-notes
+    permissions:
+      contents: write
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '14.0'
+      SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+      RELEASE_TAG: ${{ needs.approved-notes.outputs.tag }}
+      RELEASE_PREVIOUS_TAG: ${{ needs.approved-notes.outputs.previous }}
+      RELEASE_SUMMARY_FILE: ${{ runner.temp }}/release-summary/summary.md
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.approved-notes.outputs.commit }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-summary
+          path: ${{ runner.temp }}/release-summary
       - name: Prepare toolchain and validate architecture
         run: |
           test "$(uname -m)" = arm64
@@ -35,7 +109,9 @@ jobs:
       - name: Test
         run: |
           cargo test --locked
-          python3 -m unittest discover -s scripts -p 'test_*.py'
+          env -u RELEASE_SUMMARY_FILE -u RELEASE_PREVIOUS_TAG python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Validate user-facing release summary
+        run: python3 -c 'import os, sys; sys.path.insert(0, "scripts"); from release import load_release_summary; load_release_summary(os.environ["RELEASE_TAG"])'
       - name: Package ad-hoc signed app
         run: bash scripts/package.sh
       - name: Verify production updater preferences
