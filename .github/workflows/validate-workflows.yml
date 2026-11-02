@@ -2,17 +2,17 @@ name: Validate workflows
 
 on:
   pull_request:
-    paths: ['.github/workflows/**']
+    paths: ['.github/workflows/**', '.github/actionlint.yaml']
   push:
     branches: [main]
-    paths: ['.github/workflows/**']
+    paths: ['.github/workflows/**', '.github/actionlint.yaml']
 
 permissions:
   contents: read
 
 jobs:
   actionlint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
         with:
