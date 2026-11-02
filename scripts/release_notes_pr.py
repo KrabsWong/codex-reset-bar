@@ -273,7 +273,18 @@ def set_gate(pr, state, description):
 
 def refresh_gate(number):
     pr = api(f'pulls/{number}')
-    if pr['state'] != 'open' or pr['base']['ref'] != 'main':
+    if pr['base']['ref'] != 'main':
+        return
+    if pr['state'] == 'closed' and pr.get('merged') is False:
+        # Retired drafts need no approval, even if their tag or branch is gone.
+        # Commit statuses have no cancelled state. Do not pass a required gate
+        # that could also apply to a reopened PR or another PR with the same head.
+        current = api(f'pulls/{number}')
+        if (current['state'] == 'closed' and current.get('merged') is False
+                and current['head'] == pr['head'] and current['base'] == pr['base']):
+            set_gate(pr, 'error', 'PR closed without merging; no release requested')
+        return
+    if pr['state'] != 'open':
         return
     set_gate(pr, 'pending', 'Checking release-note approval')
     files = pages(f'pulls/{number}/files')

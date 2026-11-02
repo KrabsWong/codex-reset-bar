@@ -299,7 +299,17 @@ The existing post-merge guard independently rechecks the latest command and stop
 publication without matching approval. Follow the acknowledgement-before-merge sequence.
 Do not merge through another workflow's `GITHUB_TOKEN`, since that merge may not
 trigger the publication workflow; merge as a user. Closing without merging does
-not publish. To replace a closed, unmerged draft for an unpublished version, first
+not publish. Closing an unmerged PR completes its gate with
+**PR closed without merging; no release requested**, rather than leaving a
+pending check. GitHub commit statuses have no cancelled state, so this uses a terminal
+`error` status, not a passing approval. It cannot unlock a reopened PR or
+another PR sharing the same commit. Reopening the
+PR reevaluates its current approval; publication still verifies the authorized
+comment and bot acknowledgement independently. Existing closed PRs can be
+updated using **Refresh release-note approval → Run workflow** with the PR number
+after this workflow is on main. Merged PRs retain their existing approval status.
+
+To replace a closed, unmerged draft for an unpublished version, first
 remove its old `release-notes/<tag>` branch, then rerun the original preparation
 run (for versions created with the level selector). The level selector is intended to prepare versions, not reset tags.
 The workflow generates fresh notes in a new PR with a pending approval status.
