@@ -199,7 +199,7 @@ dependencies = [
 
 [[package]]
 name = "codex-reset"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "async-channel",
  "base64",
