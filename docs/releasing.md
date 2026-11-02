@@ -223,8 +223,10 @@ Create a newer tag/PR against the new latest; do not move an existing tag.
 OpenCode receives commit messages and actual code/test differences between the
 previous published tag and target tag. On first release, it compares the target
 tree against an empty tree. Lockfile and release-note files are excluded. The
-prompt groups user-visible changes under `## 新特性`, `## Bugfix`, and `## 优化`,
-omits empty sections, and prohibits unsupported claims. Markdown structure and
+prompt writes all headings and bullet text in English, grouping user-visible changes
+under `## New Features`, `## Bug Fixes`, and `## Improvements`. This also applies
+to revisions requested in another language. It omits empty sections and prohibits
+unsupported claims. Markdown structure and
 placeholders are validated; your PR review confirms factual accuracy.
 
 Missing credentials/model, CLI installation failure, provider errors, a

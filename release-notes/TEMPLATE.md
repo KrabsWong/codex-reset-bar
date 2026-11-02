@@ -1,8 +1,8 @@
-## 新特性
-- TODO：说明新增的能力，以及用户如何使用；没有此类改动则删除整个分类。
+## New Features
+- TODO: Describe the new capability and how to use it; remove categories with no changes.
 
-## Bugfix
-- TODO：说明在什么场景遇到什么问题，以及修复后的行为。
+## Bug Fixes
+- TODO: Describe the affected scenario, the problem, and the corrected behavior.
 
-## 优化
-- TODO：说明具体改善了什么体验，避免只写“优化体验”。
+## Improvements
+- TODO: Describe the specific improvement to the user experience.

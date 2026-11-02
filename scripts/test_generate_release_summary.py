@@ -15,7 +15,7 @@ class SummaryGenerationTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.summary = '## 新特性\n- 更新窗口中直接显示本次更新内容。\n'
+        self.summary = '## New Features\n- View release notes directly in the update window.\n'
 
     def git(self, *args):
         return subprocess.check_output(['git', '-c', 'user.name=Test', '-c',

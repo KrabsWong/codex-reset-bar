@@ -16,7 +16,7 @@ class ReleaseNotesTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.git('init', '-b', 'main')
         (self.root / 'release-notes').mkdir()
-        self.summary = '## 新特性\n- 在更新弹窗中查看本次版本的更新摘要。\n\n## Bugfix\n- 修复含有 & 和 < 字符的内容显示。\n'
+        self.summary = '## New Features\n- 在更新弹窗中查看本次版本的更新摘要。\n\n## Bug Fixes\n- 修复含有 & 和 < 字符的内容显示。\n'
         for tag in ('v0.1.0', 'v0.2.0'):
             (self.root / 'release-notes' / f'{tag}.md').write_text(self.summary)
 
@@ -38,11 +38,11 @@ class ReleaseNotesTests(unittest.TestCase):
 
     def test_summary_requires_real_categories_and_items(self):
         path = self.root / 'release-notes/v0.2.0.md'
-        for invalid in ('## 新特性', '## 新特性\n- TODO: describe change',
-                        '## Bugfix\n- 待填写', '## Other\n- Change',
-                        '## 优化\n- One\n## 优化\n- Two',
-                        '## 新特性\n## Bugfix\n- Fix',
-                        '## Bugfix\n- Fix\n## 优化', 'Uncategorized change'):
+        for invalid in ('## New Features', '## New Features\n- TODO: describe change',
+                        '## Bug Fixes\n- 待填写', '## Other\n- Change',
+                        '## Improvements\n- One\n## Improvements\n- Two',
+                        '## New Features\n## Bug Fixes\n- Fix',
+                        '## Bug Fixes\n- Fix\n## Improvements', 'Uncategorized change', '## 新特性\n- Change'):
             with self.subTest(summary=invalid):
                 path.write_text(invalid)
                 with self.assertRaises(ValueError):
@@ -52,7 +52,7 @@ class ReleaseNotesTests(unittest.TestCase):
 
     def test_single_category_is_enough_and_template_is_rejected(self):
         path = self.root / 'release-notes/v0.2.0.md'
-        path.write_text('## 优化\n- 缩短打开设置窗口的等待时间。\n')
+        path.write_text('## Improvements\n- 缩短打开设置窗口的等待时间。\n')
         self.assertEqual(release.load_release_summary('v0.2.0', self.root), path.read_text())
         path.write_text((Path(__file__).resolve().parents[1] / 'release-notes/TEMPLATE.md').read_text())
         with self.assertRaisesRegex(ValueError, 'placeholder'):
@@ -73,7 +73,7 @@ class ReleaseNotesTests(unittest.TestCase):
     def test_publish_rejects_stale_summary_before_github_mutation(self):
         (self.root / 'dist').mkdir()
         (self.root / 'dist/Codex-Resets-0.2.0-macOS-arm64.zip').touch()
-        self.write_feed('## 优化\n- Outdated summary.\n')
+        self.write_feed('## Improvements\n- Outdated summary.\n')
         with patch.object(release, 'ROOT', self.root), patch.object(release, 'github_release') as github:
             with self.assertRaisesRegex(ValueError, 'prepare and sign again'):
                 release.publish('v0.2.0')
@@ -138,7 +138,7 @@ class ReleaseNotesTests(unittest.TestCase):
         self.git('tag', '-a', 'v0.1.0', '-m', 'First release')
         notes = generate_release_notes('v0.1.0', None, self.root)
         self.assertIn(self.summary.strip(), notes)
-        self.assertLess(notes.index('## 新特性'), notes.index('## Commits'))
+        self.assertLess(notes.index('## New Features'), notes.index('## Commits'))
         self.assertIn('First published release', notes)
         self.assertIn('Commits (2)', notes)
         self.assertIn(f'Initial app — [{first}]', notes)

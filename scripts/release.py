@@ -91,8 +91,8 @@ def validate_release_summary(summary):
             if section and not has_items:
                 raise ValueError('Release summary contains an empty section')
             section = line[3:]
-            if section not in ('新特性', 'Bugfix', '优化') or section in sections:
-                raise ValueError('Release summary requires unique 新特性 / Bugfix / 优化 sections')
+            if section not in ('New Features', 'Bug Fixes', 'Improvements') or section in sections:
+                raise ValueError('Release summary requires unique New Features / Bug Fixes / Improvements sections')
             sections.add(section)
             has_items = False
         elif section and line.startswith('- ') and line[2:].strip():
@@ -106,7 +106,7 @@ def validate_release_summary(summary):
 
 def embedded_release_notes(tag, summary):
     return (f'# Codex Resets {tag[1:]}\n\n{summary}\n'
-            f'[查看完整更新记录](https://github.com/{REPO}/releases/tag/{tag})\n')
+            f'[View full release notes](https://github.com/{REPO}/releases/tag/{tag})\n')
 
 
 def add_release_summary(item, tag, summary):

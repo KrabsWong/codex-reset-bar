@@ -18,7 +18,7 @@ class ReleasePRTests(unittest.TestCase):
         self.head = 'a' * 40
         self.commit = 'b' * 40
         self.data = dict(tag='v0.2.0', commit=self.commit, previous='v0.1.0')
-        self.summary = '## 新特性\n- 在更新窗口查看版本说明。\n'
+        self.summary = '## New Features\n- View release notes in the update window.\n'
         self.pr = dict(number=7, user={'id': review.BOT_ID}, state='open', merged=False,
                        body=review.marker(review.MARKER, self.data),
                        head=dict(ref='release-notes/v0.2.0', sha=self.head, repo={'full_name': release.REPO}),
@@ -82,7 +82,7 @@ class ReleasePRTests(unittest.TestCase):
         changed['head']['sha'] = 'e' * 40
         with patch.object(review, 'api', side_effect=[{'permission': 'write'}, self.pr, {}, changed]), \
              patch.object(review, 'validate_pr', return_value=(self.data, self.summary, 'blob')), \
-             patch.object(review, 'draft', return_value='## 优化\n- 更快。\n'), \
+             patch.object(review, 'draft', return_value='## Improvements\n- Faster startup.\n'), \
              patch.object(review, 'write_notes') as write:
             with self.assertRaisesRegex(ValueError, 'PR changed'):
                 review.comment(self.event)
@@ -199,7 +199,7 @@ class ReleasePRTests(unittest.TestCase):
     def test_possible_credentials_are_not_committed(self):
         with patch.object(review, 'api') as api:
             with self.assertRaisesRegex(ValueError, 'credential'):
-                review.write_notes('release-notes/v0.2.0', 'v0.2.0', '## Bugfix\n- ghp_' + 'x' * 30)
+                review.write_notes('release-notes/v0.2.0', 'v0.2.0', '## Bug Fixes\n- ghp_' + 'x' * 30)
             api.assert_not_called()
 
 

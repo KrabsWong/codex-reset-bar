@@ -61,7 +61,7 @@ print(key.publicKey.rawRepresentation.base64EncodedString())
 </item></channel></rss>''')
     tree = ET.parse(feed)
     add_release_summary(tree.find('./channel/item'), 'v1.0.1',
-                        '## 新特性\n- 更新摘要测试：支持 **Markdown**、中文 & 特殊字符 < >。\n')
+                        '## New Features\n- 更新摘要测试：支持 **Markdown**、中文 & 特殊字符 < >。\n')
     tree.write(feed, encoding='utf-8', xml_declaration=True)
     run(args.sdk.resolve() / 'bin/sign_update', '--ed-key-file', key, feed, capture_output=True)
     key.unlink()
@@ -111,7 +111,7 @@ static bool hasReleaseNotes(NSView *view) {
         NSString *text = [(NSTextView *)view string];
         if ([text containsString:@"更新摘要测试"] && [text containsString:@"Markdown"] &&
             [text containsString:@"中文 & 特殊字符 < >"] && ![text containsString:@"**Markdown**"] &&
-            ![text containsString:@"## 新特性"]) return true;
+            ![text containsString:@"## New Features"]) return true;
     }
     for (NSView *child in view.subviews) if (hasReleaseNotes(child)) return true;
     return false;
