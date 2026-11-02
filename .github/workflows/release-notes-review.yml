@@ -8,6 +8,7 @@ permissions:
   contents: write
   pull-requests: read
   issues: write
+  statuses: write
 
 concurrency:
   group: release-notes-review-${{ github.event.issue.number }}
@@ -27,6 +28,11 @@ jobs:
           ref: main
           persist-credentials: false
           fetch-depth: 0
+      - name: Refresh approval before processing the command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: python3 scripts/release_notes_pr.py gate --pr "$PR_NUMBER"
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -41,3 +47,9 @@ jobs:
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
           OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
         run: python3 scripts/release_notes_pr.py comment
+      - name: Refresh approval after processing the command
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+        run: python3 scripts/release_notes_pr.py gate --pr "$PR_NUMBER"

@@ -215,8 +215,24 @@ artifact, retained 30 days. Other main changes during review cannot silently
 enter the tagged release. The published GitHub Release contains this same
 summary plus complete commit history; Sparkle embeds it before signing.
 
-Merging without the matching approval stops publication (it does not disable
-GitHub's merge button). Follow the acknowledgement-before-merge sequence.
+Protect main with a required commit status named **Release notes approval**, sourced
+from GitHub Actions, with no bypass actors. Install the gate workflows on main
+before enabling this rule. Run **Refresh release-note approval → Run workflow**
+with each existing PR number (including the current release-note PR) to bootstrap
+its status. Keep "Require branches to be up to date" off: release-note PRs retain
+their original source tag and must not acquire unrelated changes during review.
+
+The status is pending until the latest authorized approval and bot acknowledgement
+match the current head SHA. Revision requests, new commits, or edited/deleted
+approval comments revoke it. Ordinary code PRs pass automatically. The gate runs
+trusted main code and also detects versioned notes files when a PR is renamed.
+Bot-created PRs receive their initial pending status directly, since GITHUB_TOKEN
+events do not trigger another workflow. Comment processing refreshes the status
+before installing/running OpenCode and again afterward, including on failure.
+
+Comment-triggered status updates are asynchronous: a brief queueing window remains.
+The existing post-merge guard independently rechecks the latest command and stops
+publication without matching approval. Follow the acknowledgement-before-merge sequence.
 Do not merge through another workflow's `GITHUB_TOKEN`, since that merge may not
 trigger the publication workflow; merge as a user. Closing without merging does
 not publish. Retry failed builds with **Re-run failed jobs**. Re-running tag

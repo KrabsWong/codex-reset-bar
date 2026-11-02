@@ -65,6 +65,75 @@ class ReleasePRTests(unittest.TestCase):
                 api.assert_not_called()
                 opened.assert_not_called()
 
+    def test_gate_requires_current_authorized_approval_and_bot_acknowledgement(self):
+        human = dict(self.event['comment'], user={'id': 123, 'login': 'maintainer'})
+        ack = dict(user={'id': review.BOT_ID}, body=review.marker('codex-release-review',
+                   dict(action='approve', head=self.head, source=10)))
+        for scenario in ('approved', 'no-ack', 'old-head', 'revision', 'deleted', 'edited', 'outsider'):
+            comments = [copy.deepcopy(human), ack]
+            if scenario == 'no-ack': comments.pop()
+            if scenario == 'old-head': comments[0]['body'] = '/release-notes approve ' + 'e' * 40
+            if scenario == 'revision': comments.append(dict(human, id=11, body='/release-notes revise Shorten it'))
+            if scenario == 'deleted': comments.pop(0)
+            if scenario == 'edited': comments[0]['body'] = '/release-notes revise Shorten it'
+            permission = 'read' if scenario == 'outsider' else 'write'
+            def api(endpoint, *args, **kwargs):
+                return {'permission': permission} if endpoint.startswith('collaborators/') else self.pr
+            with self.subTest(scenario=scenario), \
+                 patch.object(review, 'api', side_effect=api), \
+                 patch.object(review, 'pages', side_effect=lambda endpoint: comments if endpoint.endswith('/comments') else []), \
+                 patch.object(review, 'validate_pr'), \
+                 patch.object(review, 'set_gate') as status:
+                review.refresh_gate(7)
+                states = [call.args[1] for call in status.call_args_list]
+                self.assertEqual(states[0], 'pending')
+                self.assertEqual(states[-1], 'success' if scenario == 'approved' else 'pending')
+
+    def test_gate_passes_ordinary_pr_but_fails_closed_for_disguised_notes(self):
+        ordinary = copy.deepcopy(self.pr)
+        ordinary['head']['ref'] = 'feature/code'
+        ordinary['body'] = 'Ordinary code change'
+        for files, invalid in [([{'filename': 'src/main.rs'}], False),
+                               ([{'filename': 'release-notes/v0.2.0.md'}], True),
+                               ([{'filename': 'archive.md', 'previous_filename': 'release-notes/v0.2.0.md'}], True)]:
+            with self.subTest(files=files), \
+                 patch.object(review, 'api', return_value=ordinary), \
+                 patch.object(review, 'pages', return_value=files), \
+                 patch.object(review, 'set_gate') as status:
+                review.refresh_gate(7)
+                self.assertEqual(status.call_args.args[1], 'failure' if invalid else 'success')
+
+    def test_gate_does_not_succeed_if_head_or_latest_command_changes(self):
+        for change in ('head', 'command'):
+            changed = copy.deepcopy(self.pr)
+            if change == 'head': changed['head']['sha'] = 'f' * 40
+            with self.subTest(change=change), \
+                 patch.object(review, 'api', side_effect=[self.pr, changed]), \
+                 patch.object(review, 'pages', return_value=[]), \
+                 patch.object(review, 'validate_pr'), \
+                 patch.object(review, 'has_approval', side_effect=[True, False]), \
+                 patch.object(review, 'set_gate') as status:
+                review.refresh_gate(7)
+                status.assert_called_once()
+                self.assertEqual(status.call_args.args[1], 'pending')
+
+    def test_gate_api_failure_leaves_pending_status(self):
+        with patch.object(review, 'api', return_value=self.pr), \
+             patch.object(review, 'pages', side_effect=RuntimeError('API unavailable')), \
+             patch.object(review, 'set_gate') as status:
+            with self.assertRaises(RuntimeError):
+                review.refresh_gate(7)
+            status.assert_called_once()
+            self.assertEqual(status.call_args.args[1], 'pending')
+
+    def test_existing_open_pr_refreshes_gate_on_retry(self):
+        pr = dict(self.pr, html_url='https://example.invalid/pr/7')
+        with patch.object(review, 'validate_tag', return_value=self.commit), \
+             patch.object(review, 'api', return_value=[pr]), \
+             patch.object(review, 'refresh_gate') as gate:
+            review.open_pr('v0.2.0')
+            gate.assert_called_once_with(7)
+
     def test_commands_are_exact_and_revision_requires_feedback(self):
         self.assertEqual(review.command('/release-notes approve ' + self.head), ('approve', self.head))
         self.assertEqual(review.command('/release-notes revise 请简化描述'), ('revise', '请简化描述'))
@@ -213,7 +282,7 @@ class ReleasePRTests(unittest.TestCase):
         calls = []
         responses = [[], None, {'object': {'sha': self.commit}}, {}, None,
                      {'commit': {'sha': self.head}}, {'object': {'sha': self.head}},
-                     {'html_url': 'https://example.invalid/pr/7'}]
+                     dict(self.pr, html_url='https://example.invalid/pr/7'), {}]
         def api(*args, **kwargs):
             calls.append((args, kwargs))
             return responses.pop(0)
@@ -226,8 +295,10 @@ class ReleasePRTests(unittest.TestCase):
         self.assertEqual(write[0], 'contents/release-notes/v0.2.0.md')
         self.assertEqual(base64.b64decode(write[1]['content']).decode(), self.summary)
         self.assertIn('\n\n', write[1]['message'])
-        self.assertEqual(calls[-1][0][0], 'pulls')
-        self.assertIn('/release-notes approve ' + self.head, calls[-1][0][1]['body'])
+        self.assertEqual(calls[-2][0][0], 'pulls')
+        self.assertIn('/release-notes approve ' + self.head, calls[-2][0][1]['body'])
+        self.assertEqual(calls[-1][0][0], 'statuses/' + self.head)
+        self.assertEqual(calls[-1][0][1]['state'], 'pending')
 
     def test_existing_pr_is_not_overwritten_on_retry(self):
         with patch.object(review, 'validate_tag', return_value=self.commit), \
