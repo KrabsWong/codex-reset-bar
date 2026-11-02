@@ -14,6 +14,7 @@ from release import (DEFAULT_RELEASE_SUMMARY, REPO, ROOT, git, github_release,
 
 BOT_ID = 41898282  # github-actions[bot]
 MARKER = 'codex-release'
+APPROVAL_STATUS = 'Release notes approval'
 
 
 def api(endpoint, data=None, method=None, missing=False):
@@ -126,6 +127,8 @@ def open_pr(tag):
     branch = 'release-notes/' + tag
     existing = api(f'pulls?state=all&head={REPO.split("/")[0]}:{branch}&base=main')
     if existing:
+        if existing[0].get('state') == 'open':
+            refresh_gate(existing[0]['number'])
         print(f'Release-note PR already exists: {existing[0]["html_url"]}')
         return
     latest = github_release('latest')
@@ -149,6 +152,7 @@ def open_pr(tag):
             '- Wait for the bot to acknowledge the current commit, then merge manually.\n'
             '- Any subsequent notes commit needs a new approval.\n\n' + marker(MARKER, data))
     pr = api('pulls', dict(title=f'Release notes for {tag}', head=branch, base='main', body=body))
+    set_gate(pr, 'pending', 'Review the notes and approve the current commit before merging')
     print(f'Created release-note PR: {pr["html_url"]}')
 
 
@@ -207,12 +211,8 @@ def approved_head(comments, head, latest_command):
     return state == dict(action='approve', head=head, source=latest_command)
 
 
-def export_approved(number, output):
-    pr = api(f'pulls/{number}')
-    if not pr['merged']:
-        raise ValueError('Only a merged release-note PR can trigger publication')
-    data, summary, _ = validate_pr(pr)
-    comments = pages(f'issues/{number}/comments')
+def has_approval(pr):
+    comments = pages(f'issues/{pr["number"]}/comments')
     # A newer maintainer command revokes an older acknowledgement even if its
     # workflow is still queued. Outsider comments cannot revoke approval.
     latest_command = None
@@ -228,8 +228,51 @@ def export_approved(number, output):
         if permission in ('admin', 'maintain', 'write'):
             latest_command = entry['id']
             latest_action = parsed_command
-    if (latest_action != ('approve', pr['head']['sha'])
-            or not approved_head(comments, pr['head']['sha'], latest_command)):
+    return (latest_action == ('approve', pr['head']['sha'])
+            and approved_head(comments, pr['head']['sha'], latest_command))
+
+
+def set_gate(pr, state, description):
+    api(f'statuses/{pr["head"]["sha"]}', dict(
+        state=state, context=APPROVAL_STATUS, description=description,
+        target_url=f'https://github.com/{REPO}/pull/{pr["number"]}'))
+
+
+def refresh_gate(number):
+    pr = api(f'pulls/{number}')
+    if pr['state'] != 'open' or pr['base']['ref'] != 'main':
+        return
+    set_gate(pr, 'pending', 'Checking release-note approval')
+    files = pages(f'pulls/{number}/files')
+    release_pr = (pr['head']['ref'].startswith('release-notes/')
+                  or f'<!-- {MARKER}:' in (pr.get('body') or '')
+                  or any(re.fullmatch(r'release-notes/v[^/]+\.md', entry.get(key, ''))
+                         for entry in files for key in ('filename', 'previous_filename')))
+    if release_pr:
+        try:
+            validate_pr(pr)
+        except (ValueError, KeyError, TypeError):
+            set_gate(pr, 'failure', 'Invalid release-note PR; check its identity and changed files')
+            return
+        if not has_approval(pr):
+            set_gate(pr, 'pending', 'Waiting for approval of the current release-note commit')
+            return
+    # Never transfer approval to a head that changed while this job was running.
+    current = api(f'pulls/{number}')
+    if (current['state'] != 'open' or current['head'] != pr['head']
+            or current['base'] != pr['base'] or current.get('body') != pr.get('body')):
+        return
+    if release_pr and not has_approval(current):
+        return
+    set_gate(pr, 'success', 'Current release notes approved' if release_pr else 'No release-note approval required')
+
+
+def export_approved(number, output):
+    pr = api(f'pulls/{number}')
+    if not pr['merged']:
+        raise ValueError('Only a merged release-note PR can trigger publication')
+    data, summary, _ = validate_pr(pr)
+    if not has_approval(pr):
         raise ValueError('Current release-note commit lacks approval; publication stopped')
     latest = github_release('latest')
     if (latest['tag_name'] if latest else None) != data['previous']:
@@ -246,7 +289,7 @@ def export_approved(number, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['start', 'open', 'comment', 'export'])
+    parser.add_argument('action', choices=['start', 'open', 'comment', 'export', 'gate'])
     parser.add_argument('--tag')
     parser.add_argument('--pr', type=int)
     parser.add_argument('--output', type=Path)
@@ -255,6 +298,8 @@ def main():
         start_release(args.tag)
     elif args.action == 'open':
         open_pr(args.tag)
+    elif args.action == 'gate':
+        refresh_gate(args.pr)
     elif args.action == 'comment':
         comment(json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text()))
     else:
