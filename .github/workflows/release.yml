@@ -3,10 +3,12 @@ name: Release macOS app
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Release tag (for example v0.1.10)"
+      level:
+        description: "Version increment (major, minor, or patch)"
         required: true
-        type: string
+        type: choice
+        default: patch
+        options: [patch, minor, major]
   push:
     tags: ['v[0-9]*.[0-9]*.[0-9]*']
   pull_request:
@@ -19,7 +21,7 @@ permissions:
 jobs:
   notes-pr:
     concurrency:
-      group: release-notes-${{ inputs.version || github.ref_name }}
+      group: release-preparation
       cancel-in-progress: false
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
@@ -45,13 +47,14 @@ jobs:
         run: npm install --global opencode-ai@1.19.5
       - name: Generate notes and open review PR
         env:
-          RELEASE_TAG: ${{ inputs.version || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_LEVEL: ${{ inputs.level }}
           GH_TOKEN: ${{ github.token }}
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
           OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            python3 scripts/release_notes_pr.py start --tag "$RELEASE_TAG"
+            python3 scripts/start_version_release.py --level "$RELEASE_LEVEL"
           else
             python3 scripts/release_notes_pr.py open --tag "$RELEASE_TAG"
           fi
