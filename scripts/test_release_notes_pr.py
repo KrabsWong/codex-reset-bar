@@ -300,9 +300,39 @@ class ReleasePRTests(unittest.TestCase):
         self.assertEqual(calls[-1][0][0], 'statuses/' + self.head)
         self.assertEqual(calls[-1][0][1]['state'], 'pending')
 
+    def test_closed_unmerged_pr_can_be_replaced_after_branch_cleanup(self):
+        closed = dict(self.pr, state='closed', merged=False, merged_at=None)
+        new_pr = dict(self.pr, number=8, html_url='https://example.invalid/pr/8')
+        responses = [[closed], None, None, {'object': {'sha': self.commit}}, {}, None,
+                     {'commit': {'sha': self.head}}, {'object': {'sha': self.head}}, new_pr, {}]
+        with patch.object(review, 'validate_tag', return_value=self.commit), \
+             patch.object(review, 'github_release', side_effect=[None, {'tag_name': 'v0.1.0'}]), \
+             patch.object(review, 'draft', return_value=self.summary) as draft, \
+             patch.object(review, 'api', side_effect=responses) as api:
+            review.open_pr('v0.2.0')
+        draft.assert_called_once_with(self.data)
+        self.assertEqual(api.call_args_list[-2].args[0], 'pulls')
+        self.assertIn('"commit": "' + self.commit, api.call_args_list[-2].args[1]['body'])
+        self.assertEqual(api.call_args.args[1]['state'], 'pending')
+        self.assertTrue(api.call_args.args[1]['target_url'].endswith('/8'))
+
+    def test_replacement_rejects_merged_published_or_uncleaned_drafts(self):
+        for scenario in ('merged', 'published', 'branch'):
+            closed = dict(self.pr, state='closed', merged_at='2026-01-01' if scenario == 'merged' else None)
+            responses = [[closed], {'object': {'sha': self.head}}]
+            with self.subTest(scenario=scenario), \
+                 patch.object(review, 'validate_tag', return_value=self.commit), \
+                 patch.object(review, 'github_release', return_value={'tag_name': 'v0.2.0'} if scenario == 'published' else None), \
+                 patch.object(review, 'api', side_effect=responses), \
+                 patch.object(review, 'draft') as draft:
+                with self.assertRaisesRegex(ValueError, 'already merged|already exists|old branch'):
+                    review.open_pr('v0.2.0')
+                draft.assert_not_called()
+
     def test_existing_pr_is_not_overwritten_on_retry(self):
         with patch.object(review, 'validate_tag', return_value=self.commit), \
-             patch.object(review, 'api', return_value=[{'html_url': 'https://example.invalid/pr/7'}]), \
+             patch.object(review, 'api', return_value=[dict(self.pr, html_url='https://example.invalid/pr/7')]), \
+             patch.object(review, 'refresh_gate'), \
              patch.object(review, 'draft') as draft:
             review.open_pr('v0.2.0')
             draft.assert_not_called()
