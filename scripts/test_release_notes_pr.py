@@ -118,6 +118,47 @@ class ReleasePRTests(unittest.TestCase):
                 status.assert_called_once()
                 self.assertEqual(status.call_args.args[1], 'pending')
 
+    def test_closed_unmerged_gate_finishes_without_validating_retired_source(self):
+        closed = dict(self.pr, state='closed', merged=False)
+        with patch.object(review, 'api', return_value=closed), \
+             patch.object(review, 'pages') as pages, \
+             patch.object(review, 'validate_pr') as validate, \
+             patch.object(review, 'has_approval') as approval, \
+             patch.object(review, 'set_gate') as status:
+            review.refresh_gate(7)
+        status.assert_called_once_with(closed, 'error', 'PR closed without merging; no release requested')
+        pages.assert_not_called()
+        validate.assert_not_called()
+        approval.assert_not_called()
+
+    def test_closed_gate_does_not_succeed_after_reopen_or_head_change(self):
+        closed = dict(self.pr, state='closed', merged=False)
+        for field in ('state', 'merged', 'head', 'base'):
+            changed = copy.deepcopy(closed)
+            changed[field] = {'state': 'open', 'merged': True,
+                              'head': dict(self.pr['head'], sha='f' * 40),
+                              'base': dict(self.pr['base'], ref='other')}[field]
+            with self.subTest(field=field), \
+                 patch.object(review, 'api', side_effect=[closed, changed]), \
+                 patch.object(review, 'set_gate') as status:
+                review.refresh_gate(7)
+            status.assert_not_called()
+
+    def test_merged_gate_does_not_replace_approval_result(self):
+        with patch.object(review, 'api', return_value=dict(self.pr, state='closed', merged=True)), \
+             patch.object(review, 'set_gate') as status:
+            review.refresh_gate(7)
+        status.assert_not_called()
+
+    def test_reopened_draft_returns_to_pending_without_approval(self):
+        with patch.object(review, 'api', return_value=self.pr), \
+             patch.object(review, 'pages', return_value=[]), \
+             patch.object(review, 'validate_pr'), \
+             patch.object(review, 'has_approval', return_value=False), \
+             patch.object(review, 'set_gate') as status:
+            review.refresh_gate(7)
+        self.assertEqual(status.call_args.args[1], 'pending')
+
     def test_gate_api_failure_leaves_pending_status(self):
         with patch.object(review, 'api', return_value=self.pr), \
              patch.object(review, 'pages', side_effect=RuntimeError('API unavailable')), \
