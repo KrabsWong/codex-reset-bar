@@ -77,8 +77,16 @@ Never store private keys in the repository, ordinary shared folders, or chat.
 
 ## Publish a version
 
-The release tag is the version source of truth. No manual version bump is
-required before tagging:
+The standard flow starts with a `release/<patch|minor|major>/<unique-id>` tag
+on latest main. It calculates the next version, automatically merges a validated
+version-only PR, creates the formal `vX.Y.Z` tag, and opens a release-notes PR
+for human approval and merge. Follow [For each release](#for-each-release).
+
+### Compatibility: explicit version tags
+
+Pushing an explicit `vX.Y.Z` tag remains supported, but skips the automatic
+version PR and does not write the version back to main. The build synchronizes
+its own checkout to the supplied tag version:
 
 | Change | Example from 0.1.5 | Tag |
 | --- | --- | --- |
@@ -86,8 +94,8 @@ required before tagging:
 | Minor | 0.2.0 | `v0.2.0` |
 | Major | 1.0.0 | `v1.0.0` |
 
-These are explicit versions, not `patch`/`minor`/`major` trigger tags. Choose a
-stable version greater than the latest published release.
+For this compatibility path, choose an explicit stable version greater than
+the latest published release.
 
 1. Review and merge the app, release scripts, and workflow changes into `main`.
    Release summaries are generated and reviewed through a PR on GitHub; no local notes preparation is required.
@@ -158,8 +166,9 @@ is optional and is not needed for this configuration.
 6. In **Settings → Actions → General → Workflow permissions**, enable
    **Allow GitHub Actions to create and approve pull requests**. Workflow YAML
    grants only each job's necessary permissions; account/organization policy
-   must also permit PR creation. The bot does not merge PRs or submit a GitHub
-   approval review; it records your explicit comment approval.
+   must also permit PR creation. The bot does not merge release-note PRs or submit a GitHub
+   approval review; it records your explicit comment approval. Version-only PRs
+   are validated and merged automatically during version preparation.
 7. Merge these workflow changes into `main` before creating the first release
    tag using this process. Comment workflows must exist on the default branch.
 
@@ -232,7 +241,7 @@ References: [Go](https://opencode.ai/v2/docs/console/go/),
 3. Request a revision by posting a new PR conversation comment:
 
    ```text
-   /oc 将第一条改为用户能理解的描述，删除内部重构内容。
+   /oc Rewrite the first item in user-friendly language and remove internal refactoring details.
    ```
 
    **Review release notes** validates the request, then its **opencode** job runs
