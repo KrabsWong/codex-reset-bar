@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create/revise release-note PRs and authorize a merged, explicitly approved draft."""
+"""Create release-note PRs and authorize a merged, explicitly approved draft."""
 import argparse
 import base64
 import json
@@ -28,7 +28,9 @@ def api(endpoint, data=None, method=None, missing=False):
     if result.returncode:
         if missing and '(HTTP 404)' in result.stderr:
             return None
-        raise RuntimeError('GitHub API request failed; no publication authorized')
+        status = re.search(r'HTTP (\d{3})', result.stderr)
+        detail = f' (HTTP {status[1]})' if status else ''
+        raise RuntimeError(f'GitHub API request failed{detail}; no publication authorized')
     return json.loads(result.stdout) if result.stdout.strip() else None
 
 
@@ -76,16 +78,14 @@ def validate_pr(pr):
     return data, summary, content['sha']
 
 
-def draft(data, current=None, feedback=''):
+def draft(data):
     try:
         context = comparison(ROOT, data['tag'], data['previous'])
-        if current:
-            context += f'\n\nCurrent draft:\n{current}\n\nMaintainer revision request:\n{feedback}'
         return generate(context, os.environ.get('OPENCODE_MODEL', ''),
                         os.environ.get('OPENCODE_GO_API_KEY', ''))
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, subprocess.SubprocessError):
-        print('::warning::AI generation unavailable; retaining existing draft or using fixed fallback.')
-        return current if current is not None else DEFAULT_RELEASE_SUMMARY
+        print('::warning::AI generation unavailable; using fixed fallback.')
+        return DEFAULT_RELEASE_SUMMARY
 
 
 def write_notes(branch, tag, summary, sha=None):
@@ -154,7 +154,7 @@ def open_pr(tag):
     head = api(f'git/ref/heads/{branch}')['object']['sha']
     body = (f'Review `release-notes/{tag}.md` in Files changed (Rendered view).\n\n'
             f'Release source: `{tag}` at `{commit}`. Only these notes are merged; the app builds from the tag.\n\n'
-            '- Request changes: `/release-notes revise <instructions>`\n'
+            '- Request changes: `/oc <instructions>` (official OpenCode bot)\n'
             f'- Approve current draft: `/release-notes approve {head}`\n'
             '- Wait for the bot to acknowledge the current commit, then merge manually.\n'
             '- Any subsequent notes commit needs a new approval.\n\n' + marker(MARKER, data))
@@ -168,6 +168,10 @@ def command(body):
     match = re.fullmatch(r'/release-notes approve ([a-f0-9]{40})', body)
     if match:
         return 'approve', match[1]
+    for prefix in ('/oc ', '/opencode '):
+        if body.startswith(prefix) and body[len(prefix):].strip():
+            return 'revise', body[len(prefix):].strip()
+    # Old requests still revoke approval, but no longer execute the custom reviser.
     prefix = '/release-notes revise '
     if body.startswith(prefix) and body[len(prefix):].strip():
         return 'revise', body[len(prefix):].strip()
@@ -189,22 +193,43 @@ def comment(event):
         raise ValueError('Approval refers to an older draft; review and approve the current head SHA')
     source = event['comment']['id']
     if action == 'revise':
-        api(f'issues/{number}/comments', dict(body='Revision requested; prior approval revoked.\n\n' +
-            marker('codex-release-review', dict(action='revise', head=head, source=source))))
-        revised = draft(data, summary, feedback)
-        current = api(f'pulls/{number}')
-        if current['state'] != 'open' or current['head']['sha'] != head:
-            raise ValueError('PR changed during generation; retry the revision request')
-        if revised != summary:
-            result = write_notes(pr['head']['ref'], data['tag'], revised, blob)
-            head = result['commit']['sha']
-        body = ('Revision request processed. Check Files changed; if generation failed, the existing draft was retained. '
-                f'After reviewing, send `/release-notes approve {head}`.\n\n' +
-                marker('codex-release-review', dict(action='revise', head=head, source=source)))
-    else:
-        body = (f'Approved release notes at `{head}`. You may now merge this PR manually.\n\n' +
-                marker('codex-release-review', dict(action='approve', head=head, source=source)))
+        raise ValueError('Post /oc <instructions> to use the official OpenCode bot')
+    body = (f'Approved release notes at `{head}`. You may now merge this PR manually.\n\n' +
+            marker('codex-release-review', dict(action='approve', head=head, source=source)))
     api(f'issues/{number}/comments', dict(body=body))
+
+
+def prepare_opencode(event):
+    """Validate a writer's request before allowing the official bot to run."""
+    action, feedback = command(event['comment']['body'])
+    if action != 'revise' or not event['comment']['body'].strip().startswith(('/oc ', '/opencode ')):
+        raise ValueError('Use /oc <instructions>')
+    login = event['comment']['user']['login']
+    if api(f'collaborators/{login}/permission')['permission'] not in ('admin', 'maintain', 'write'):
+        raise ValueError('Only repository writers may request revisions')
+    pr = api(f'pulls/{event["issue"]["number"]}')
+    if pr['state'] != 'open':
+        raise ValueError('Release PR is no longer open')
+    data, summary, _ = validate_pr(pr)
+    from generate_release_summary import PROMPT
+    instructions = PROMPT.replace('Return ONLY Markdown with these headings',
+                                  'Edit the release-note file using these headings')
+    prompt = ('The following formatting instructions apply to the file content, not your reply.\n' + instructions + '\nModify only release-notes/' + data['tag'] + '.md. '
+              'Do not approve, merge, publish, change branches, or execute shell commands. '
+              'The official runner handles committing and pushing. Explain the result in your reply.\n'
+              + comparison(ROOT, data['tag'], data['previous'])
+              + '\nCurrent draft:\n' + summary + '\nMaintainer request:\n' + feedback)
+    # Linux limits each environment string; fail explicitly rather than truncate.
+    if len(prompt.encode('utf-8')) > 120_000:
+        raise ValueError('Revision context exceeds 120 KB; edit the note manually in GitHub')
+    config = dict(permission={'*': 'deny', 'read': {'*': 'allow', '.git/*': 'deny', '**/.git/**': 'deny'},
+                              'edit': {'*': 'deny', f'release-notes/{data["tag"]}.md': 'allow'}},
+                  provider={'opencode-go': {'options': {'apiKey': '{env:OPENCODE_GO_API_KEY}'}}})
+    # JSON produces single-line outputs; no user text is interpolated into shell code.
+    with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+        stream.write('prompt=' + json.dumps(prompt) + '\n')
+        stream.write('config=' + json.dumps(config) + '\n')
+        stream.write('tag=' + data['tag'] + '\n')
 
 
 def approved_head(comments, head, latest_command):
@@ -296,7 +321,7 @@ def export_approved(number, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['start', 'open', 'comment', 'export', 'gate'])
+    parser.add_argument('action', choices=['start', 'open', 'comment', 'export', 'gate', 'prepare-opencode'])
     parser.add_argument('--tag')
     parser.add_argument('--pr', type=int)
     parser.add_argument('--output', type=Path)
@@ -307,6 +332,8 @@ def main():
         open_pr(args.tag)
     elif args.action == 'gate':
         refresh_gate(args.pr)
+    elif args.action == 'prepare-opencode':
+        prepare_opencode(json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text()))
     elif args.action == 'comment':
         comment(json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text()))
     else:

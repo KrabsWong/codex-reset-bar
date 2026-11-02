@@ -69,11 +69,12 @@ class ReleasePRTests(unittest.TestCase):
         human = dict(self.event['comment'], user={'id': 123, 'login': 'maintainer'})
         ack = dict(user={'id': review.BOT_ID}, body=review.marker('codex-release-review',
                    dict(action='approve', head=self.head, source=10)))
-        for scenario in ('approved', 'no-ack', 'old-head', 'revision', 'deleted', 'edited', 'outsider'):
+        for scenario in ('approved', 'no-ack', 'old-head', 'revision', 'opencode', 'deleted', 'edited', 'outsider'):
             comments = [copy.deepcopy(human), ack]
             if scenario == 'no-ack': comments.pop()
             if scenario == 'old-head': comments[0]['body'] = '/release-notes approve ' + 'e' * 40
             if scenario == 'revision': comments.append(dict(human, id=11, body='/release-notes revise Shorten it'))
+            if scenario == 'opencode': comments.append(dict(human, id=11, body='/oc Shorten it'))
             if scenario == 'deleted': comments.pop(0)
             if scenario == 'edited': comments[0]['body'] = '/release-notes revise Shorten it'
             permission = 'read' if scenario == 'outsider' else 'write'
@@ -137,7 +138,9 @@ class ReleasePRTests(unittest.TestCase):
     def test_commands_are_exact_and_revision_requires_feedback(self):
         self.assertEqual(review.command('/release-notes approve ' + self.head), ('approve', self.head))
         self.assertEqual(review.command('/release-notes revise 请简化描述'), ('revise', '请简化描述'))
-        for invalid in ('approve', '/release-notes approve', '/release-notes approve later', '/release-notes revise ', 'text /release-notes approve'):
+        self.assertEqual(review.command('/oc Shorten it'), ('revise', 'Shorten it'))
+        self.assertEqual(review.command('/opencode Shorten it'), ('revise', 'Shorten it'))
+        for invalid in ('/oc', '/oc ', '/ocean hello', 'approve', '/release-notes approve', '/release-notes approve later', '/release-notes revise ', 'text /release-notes approve'):
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 review.command(invalid)
 
@@ -185,24 +188,54 @@ class ReleasePRTests(unittest.TestCase):
         self.assertIn(self.head, api.call_args.args[1]['body'])
         self.assertIn('"action": "approve"', api.call_args.args[1]['body'])
 
-    def test_revision_rechecks_head_before_writing(self):
-        self.event['comment']['body'] = '/release-notes revise 简化'
-        changed = copy.deepcopy(self.pr)
-        changed['head']['sha'] = 'e' * 40
-        with patch.object(review, 'api', side_effect=[{'permission': 'write'}, self.pr, {}, changed]), \
+    def test_legacy_revision_does_not_run_custom_generator(self):
+        self.event['comment']['body'] = '/release-notes revise Shorten it'
+        with patch.object(review, 'api', side_effect=[{'permission': 'write'}, self.pr]), \
              patch.object(review, 'validate_pr', return_value=(self.data, self.summary, 'blob')), \
-             patch.object(review, 'draft', return_value='## Improvements\n- Faster startup.\n'), \
-             patch.object(review, 'write_notes') as write:
-            with self.assertRaisesRegex(ValueError, 'PR changed'):
+             patch.object(review, 'draft') as draft:
+            with self.assertRaisesRegex(ValueError, 'official OpenCode'):
                 review.comment(self.event)
-            write.assert_not_called()
+            draft.assert_not_called()
 
-    def test_generation_failure_keeps_edits_or_uses_initial_fallback(self):
+    def test_official_bot_preflight_pins_context_and_edit_scope(self):
+        self.event['comment']['body'] = '/oc Explain the benefit'
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'outputs'
+            with patch.dict(os.environ, {'GITHUB_OUTPUT': str(output)}), \
+                 patch.object(review, 'api', side_effect=[{'permission': 'write'}, self.pr]), \
+                 patch.object(review, 'validate_pr', return_value=(self.data, self.summary, 'blob')), \
+                 patch.object(review, 'comparison', return_value='fixed tag diff') as comparison:
+                review.prepare_opencode(self.event)
+            values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+            prompt = json.loads(values['prompt'])
+            config = json.loads(values['config'])
+            self.assertIn('fixed tag diff', prompt)
+            self.assertIn('Explain the benefit', prompt)
+            self.assertEqual(config['permission']['*'], 'deny')
+            self.assertEqual(config['permission']['edit'], {'*': 'deny', 'release-notes/v0.2.0.md': 'allow'})
+            comparison.assert_called_once_with(review.ROOT, 'v0.2.0', 'v0.1.0')
+
+    def test_official_bot_rejects_oversized_context_without_truncation(self):
+        self.event['comment']['body'] = '/oc Shorten it'
+        with patch.object(review, 'api', side_effect=[{'permission': 'write'}, self.pr]), \
+             patch.object(review, 'validate_pr', return_value=(self.data, self.summary, 'blob')), \
+             patch.object(review, 'comparison', return_value='x' * 120_000):
+            with self.assertRaisesRegex(ValueError, '120 KB'):
+                review.prepare_opencode(self.event)
+
+    def test_official_bot_rejects_outsiders_before_preparing_context(self):
+        self.event['comment']['body'] = '/oc Shorten it'
+        with patch.object(review, 'api', return_value={'permission': 'read'}), \
+             patch.object(review, 'comparison') as comparison:
+            with self.assertRaisesRegex(ValueError, 'repository writers'):
+                review.prepare_opencode(self.event)
+            comparison.assert_not_called()
+
+    def test_generation_failure_uses_initial_fallback(self):
         with patch.object(review, 'comparison', return_value='diff'), \
              patch.object(review, 'generate', side_effect=ValueError('secret')), \
              contextlib.redirect_stdout(io.StringIO()) as log:
             self.assertEqual(review.draft(self.data), release.DEFAULT_RELEASE_SUMMARY)
-            self.assertEqual(review.draft(self.data, self.summary, 'revise'), self.summary)
         self.assertNotIn('secret', log.getvalue())
 
     def test_merged_unapproved_draft_cannot_publish(self):
