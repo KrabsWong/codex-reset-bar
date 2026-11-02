@@ -10,7 +10,7 @@ on:
         default: patch
         options: [patch, minor, major]
   push:
-    tags: ['v[0-9]*.[0-9]*.[0-9]*']
+    tags: ['v[0-9]*.[0-9]*.[0-9]*', 'release/patch/*', 'release/minor/*', 'release/major/*']
   pull_request:
     types: [closed]
     branches: [main]
@@ -36,6 +36,8 @@ jobs:
         run: test "$GITHUB_REF" = refs/heads/main
       - uses: actions/checkout@v5
         with:
+          # Request tags run trusted main scripts; their target is validated below.
+          ref: ${{ startsWith(github.ref, 'refs/tags/release/') && 'main' || github.ref }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@v4
@@ -55,6 +57,8 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             python3 scripts/start_version_release.py --level "$RELEASE_LEVEL"
+          elif [[ "$RELEASE_TAG" == release/* ]]; then
+            python3 scripts/start_version_release.py --request-tag "$RELEASE_TAG"
           else
             python3 scripts/release_notes_pr.py open --tag "$RELEASE_TAG"
           fi

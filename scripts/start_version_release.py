@@ -62,8 +62,23 @@ def validate_version_pr(pr, data):
     return expected
 
 
-def start(level):
-    if os.environ.get('GITHUB_REF') != 'refs/heads/main':
+def request_level(tag):
+    match = re.fullmatch(r'release/(major|minor|patch)/([A-Za-z0-9][A-Za-z0-9._-]*)', tag)
+    if not match:
+        raise ValueError('Use release/<major|minor|patch>/<unique-id>')
+    return match[1]
+
+
+def start(level=None, request_tag=None):
+    source = None
+    if request_tag is not None:
+        level = request_level(request_tag)
+        if os.environ.get('GITHUB_REF') != 'refs/tags/' + request_tag:
+            raise ValueError('Release request must match the triggering tag')
+        source = git(ROOT, 'rev-parse', '--verify', f'refs/tags/{request_tag}^{{commit}}')
+        subprocess.run(['git', 'merge-base', '--is-ancestor', source, 'origin/main'],
+                       cwd=ROOT, check=True, capture_output=True)
+    elif os.environ.get('GITHUB_REF') != 'refs/heads/main':
         raise ValueError('Automatic releases must run from main')
     latest = github_release('latest')
     previous = latest['tag_name'] if latest else 'v0.0.0'
@@ -98,6 +113,8 @@ def start(level):
         if not match:
             raise ValueError('Existing version PR is not managed by this workflow')
         data = json.loads(match[1])
+        if request_tag and (data.get('request') != request_tag or data.get('base') != source):
+            raise ValueError('Release request tag changed since preparation')
         if data.get('run') != run_id:
             raise ValueError('Version PR belongs to another run; retry that original Actions run')
         if data.get('tag') != tag or data.get('previous') != previous:
@@ -106,8 +123,12 @@ def start(level):
         if api('git/ref/tags/' + tag, missing=True):
             raise ValueError('Unpublished tag already exists; resume its notes workflow instead')
         base = api('git/ref/heads/main')['object']['sha']
+        if source is not None and source != base:
+            raise ValueError('Request tag must point to current main; use a new request tag on latest main')
         git(ROOT, 'fetch', 'origin', 'main')
         data = dict(tag=tag, previous=previous, base=base, run=run_id)
+        if request_tag:
+            data['request'] = request_tag
         expected = version_files(base, tag)
         tree = api('git/trees', dict(base_tree=api('git/commits/' + base)['tree']['sha'],
                     tree=[dict(path=p, mode='100644', type='blob', content=t) for p, t in expected.items()]))
@@ -137,12 +158,18 @@ def start(level):
             raise ValueError('Version PR is blocked by branch checks; inspect it and retry')
         if (github_release('latest') or {}).get('tag_name', 'v0.0.0') != previous:
             raise ValueError('Latest release changed during preparation')
+        if source is not None and api('git/ref/heads/main')['object']['sha'] != source:
+            raise ValueError('Main advanced during preparation; inspect version PR before retrying')
         result = api(f'pulls/{pr["number"]}/merge', dict(sha=pr['head']['sha'], merge_method='merge'), 'PUT')
         if not result.get('merged'):
             raise ValueError('GitHub did not merge the version PR')
         merged = result['sha']
     else:
         merged = pr['merge_commit_sha']
+    if source is not None:
+        parents = api('git/commits/' + merged)['parents']
+        if [parent['sha'] for parent in parents] != [source, pr['head']['sha']]:
+            raise ValueError('Merge result includes changes outside the release request')
     git(ROOT, 'fetch', 'origin', 'main')
     for path, text in expected.items():
         if git(ROOT, 'show', f'{merged}:{path}') + '\n' != text:
@@ -161,5 +188,8 @@ def start(level):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--level', choices=['major', 'minor', 'patch'], required=True)
-    start(parser.parse_args().level)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument('--level', choices=['major', 'minor', 'patch'])
+    mode.add_argument('--request-tag')
+    args = parser.parse_args()
+    start(args.level, args.request_tag)
