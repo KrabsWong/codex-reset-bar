@@ -235,8 +235,18 @@ The existing post-merge guard independently rechecks the latest command and stop
 publication without matching approval. Follow the acknowledgement-before-merge sequence.
 Do not merge through another workflow's `GITHUB_TOKEN`, since that merge may not
 trigger the publication workflow; merge as a user. Closing without merging does
-not publish. Retry failed builds with **Re-run failed jobs**. Re-running tag
-creation reuses an existing PR and never overwrites edits.
+not publish. To replace a closed, unmerged draft for an unpublished version, first
+remove its old `release-notes/<tag>` branch, then dispatch the same version again.
+The workflow generates fresh notes in a new PR with a pending approval status.
+It refuses to reuse merged notes, an existing release, or a leftover draft branch.
+
+If the unpublished tag must also include newer main code, explicitly remove that
+old tag before dispatching again. Merge any workflow fixes into main first. The
+new run creates the missing tag at its main commit; it never moves existing tags
+automatically. Never delete/recreate tags for a distributed version.
+
+Retry failed builds with **Re-run failed jobs**. Re-running tag creation reuses an
+existing open PR and never overwrites edits.
 
 Release one version at a time: if another version becomes latest during review,
 publication stops rather than publishing notes based on an outdated comparison.

@@ -126,11 +126,18 @@ def open_pr(tag):
     commit = validate_tag(ROOT, tag)
     branch = 'release-notes/' + tag
     existing = api(f'pulls?state=all&head={REPO.split("/")[0]}:{branch}&base=main')
-    if existing:
-        if existing[0].get('state') == 'open':
-            refresh_gate(existing[0]['number'])
-        print(f'Release-note PR already exists: {existing[0]["html_url"]}')
+    active = next((pr for pr in existing if pr['state'] == 'open'), None)
+    if active:
+        refresh_gate(active['number'])
+        print(f'Release-note PR already exists: {active["html_url"]}')
         return
+    if any(pr.get('merged_at') or pr.get('merged') for pr in existing):
+        raise ValueError('Release notes were already merged; use a new version')
+    if existing:
+        if github_release('tags/' + tag):
+            raise ValueError('Release already exists; use a new version')
+        if api(f'git/ref/heads/{branch}', missing=True) is not None:
+            raise ValueError('Closed release-note PR still has its branch; remove the old branch before restarting')
     latest = github_release('latest')
     if latest and version_tuple(latest['tag_name']) >= version_tuple(tag):
         raise ValueError('Release version must be newer than latest')
