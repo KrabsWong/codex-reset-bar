@@ -1,0 +1,5 @@
+# GitHub-hosted label not yet included in actionlint v1.7.12's built-in list.
+# Remove this entry when the pinned validator recognizes Ubuntu 26.04.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
