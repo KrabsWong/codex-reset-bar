@@ -4,51 +4,110 @@ on:
   issue_comment:
     types: [created]
 
-permissions:
-  contents: write
-  pull-requests: read
-  issues: write
-  statuses: write
+permissions: {}
 
 concurrency:
   group: release-notes-review-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
-  review:
+  prepare:
     if: >-
       github.event.issue.pull_request &&
-      startsWith(github.event.comment.body, '/release-notes ')
+      (startsWith(github.event.comment.body, '/release-notes ') ||
+       startsWith(github.event.comment.body, '/oc ') ||
+       startsWith(github.event.comment.body, '/opencode '))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      statuses: write
+    outputs:
+      prompt: ${{ steps.bot.outputs.prompt }}
+      config: ${{ steps.bot.outputs.config }}
+      tag: ${{ steps.bot.outputs.tag }}
     steps:
-      # Never execute code from the PR; commands and author permissions are checked in Python.
       - uses: actions/checkout@v5
         with:
           ref: main
           persist-credentials: false
           fetch-depth: 0
-      - name: Refresh approval before processing the command
+      - name: Revoke stale approval before processing
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.issue.number }}
         run: python3 scripts/release_notes_pr.py gate --pr "$PR_NUMBER"
+      - name: Process explicit approval
+        if: startsWith(github.event.comment.body, '/release-notes ')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_notes_pr.py comment
+      - name: Validate OpenCode request and fix release context
+        id: bot
+        if: startsWith(github.event.comment.body, '/oc ') || startsWith(github.event.comment.body, '/opencode ')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_notes_pr.py prepare-opencode
+
+  opencode:
+    needs: prepare
+    if: needs.prepare.outputs.prompt != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      # The official GitHub runner checks out the PR and handles replies/commits.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Install pinned OpenCode CLI for revisions
-        if: startsWith(github.event.comment.body, '/release-notes revise ')
-        continue-on-error: true
-        timeout-minutes: 3
+      - name: Install official OpenCode GitHub runner
         run: npm install --global opencode-ai@1.19.5
-      - name: Process maintainer command
+      - name: Configure bot commit identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: Install trusted outgoing-history guard
+        run: |
+          mkdir -p "$RUNNER_TEMP/notes-hooks"
+          cp scripts/check_notes_push.py "$RUNNER_TEMP/notes-hooks/pre-push"
+          chmod +x "$RUNNER_TEMP/notes-hooks/pre-push"
+          git config core.hooksPath "$RUNNER_TEMP/notes-hooks"
+      - name: Revise notes with official OpenCode bot
         env:
-          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          USE_GITHUB_TOKEN: 'true'
+          RELEASE_NOTE_TAG: ${{ needs.prepare.outputs.tag }}
+          MODEL: ${{ vars.OPENCODE_MODEL }}
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
-          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
-        run: python3 scripts/release_notes_pr.py comment
-      - name: Refresh approval after processing the command
-        if: always()
+          OPENCODE_CONFIG_CONTENT: ${{ needs.prepare.outputs.config }}
+          PROMPT: ${{ fromJSON(needs.prepare.outputs.prompt) }}
+        run: opencode github run
+
+  refresh:
+    needs: [prepare, opencode]
+    if: always() && needs.prepare.result != 'skipped'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      statuses: write
+    steps:
+      # Fresh runner: never execute files from the agent's workspace.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate changed files and refresh approval
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.issue.number }}

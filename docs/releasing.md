@@ -134,8 +134,9 @@ replace Latest. Release jobs are serialized.
 Everything happens on GitHub: a tag push creates a release-note PR, maintainer
 comments request revisions or approve the current draft, and a manual merge
 starts packaging and publication. No local OpenCode, notes preparation, or build
-is required. The OpenCode GitHub App / issue-comment bot is not required either;
-the repository's own Actions workflows run the pinned CLI.
+is required. Revisions use the official OpenCode GitHub bot (`opencode github run`)
+with the existing Actions token and pinned CLI. Installing the OpenCode GitHub App
+is optional and is not needed for this configuration.
 
 ### One-time account and repository setup
 
@@ -184,14 +185,18 @@ References: [Go](https://opencode.ai/v2/docs/console/go/),
 3. Request a revision by posting a new PR conversation comment:
 
    ```text
-   /release-notes revise 将第一条改为用户能理解的描述，删除内部重构内容。
+   /oc 将第一条改为用户能理解的描述，删除内部重构内容。
    ```
 
-   **Review release notes** updates the same PR and replies with the current
-   approval command. You can also edit the Markdown file directly in GitHub.
-   Revisions that fail keep the existing draft, so your edits are not erased.
-4. Once satisfied, copy the bot's full approval command, which includes the
-   current 40-character PR head commit SHA:
+   **Review release notes** validates the request, then its **opencode** job runs
+   the official bot, which replies and commits changes to the same PR. `/opencode`
+   is also supported. Use a new conversation comment, not an inline review comment.
+   Follow progress in **Actions → Review release notes → opencode**; a failed run
+   is not a completed revision. Inspect Files changed after completion. You can
+   also edit the Markdown file directly in GitHub. The old `/release-notes revise`
+   command no longer generates revisions; post a new `/oc` comment instead.
+4. Once satisfied, use the current 40-character PR head commit SHA from the
+   **Commits** tab (the original PR body's command becomes stale after revisions):
 
    ```text
    /release-notes approve <full-head-sha>
@@ -228,7 +233,10 @@ approval comments revoke it. Ordinary code PRs pass automatically. The gate runs
 trusted main code and also detects versioned notes files when a PR is renamed.
 Bot-created PRs receive their initial pending status directly, since GITHUB_TOKEN
 events do not trigger another workflow. Comment processing refreshes the status
-before installing/running OpenCode and again afterward, including on failure.
+before running OpenCode and again afterward, including on failure. The final
+check runs on a separate runner with a fresh main checkout; the agent cannot
+modify the code used by that check. This explicit refresh is required because
+commits made with GITHUB_TOKEN do not trigger another workflow.
 
 Comment-triggered status updates are asynchronous: a brief queueing window remains.
 The existing post-merge guard independently rechecks the latest command and stops
@@ -266,14 +274,29 @@ placeholders are validated; your PR review confirms factual accuracy.
 Missing credentials/model, CLI installation failure, provider errors, a
 180-second generation timeout, invalid output, or comparison size above 300 KB
 produce the initial fallback **Fixed some known issues.** The fallback still
-requires your approval and merge. A failed revision retains the existing draft
-and revokes any previous approval; no silently truncated diff is summarized.
+requires your approval and merge. Revision requests revoke previous approval;
+contexts above 120 KB are rejected before launching the bot (edit manually in
+GitHub for these releases). No silently truncated diff is summarized.
+Official-bot revisions can create commits before a later failure: always inspect
+the final diff and workflow result before approving.
 
-The agent runs in a temporary directory with tools denied and comparison text
-as input. Its process receives neither GitHub credentials nor signing keys,
-and cannot modify the checkout. The workflow script alone commits the notes
-file using the GitHub API. Repository differences go to your selected Go model.
-Signing keys are available only to the separate macOS signing step.
+Initial generation runs in a temporary directory with tools denied and comparison
+text as input; it receives no GitHub or signing credentials. Revisions instead
+use the official GitHub runner with a GitHub token for comments and commits.
+Only repository writers may invoke it on a validated release-note PR. Its model
+can read files and edit the version-specific note; shell and other tools are
+denied. A trusted pre-push hook outside the checkout restricts every outgoing
+commit to the note file and scans the complete outgoing history for credentials.
+The independent gate rejects changes outside that note and never trusts
+the model to grant approval. Repository differences and PR context go to your
+selected Go model. Signing keys remain available only to the macOS signing step.
+
+The official GitHub runner is invoked directly from `opencode-ai@1.19.5`, avoiding
+the official composite action’s automatic download of the latest CLI. Existing
+`OPENCODE_GO_API_KEY` and `OPENCODE_MODEL` settings are reused; no new secret or
+GitHub App installation is required. See [official GitHub integration](https://opencode.ai/docs/github/).
+After merging this migration, existing notes PRs can use `/oc` immediately;
+there is no need to recreate their tags or PRs.
 
 ### Optional local asset preparation
 
