@@ -1,6 +1,12 @@
 name: Release macOS app
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (for example v0.1.10)"
+        required: true
+        type: string
   push:
     tags: ['v[0-9]*.[0-9]*.[0-9]*']
   pull_request:
@@ -13,15 +19,18 @@ permissions:
 jobs:
   notes-pr:
     concurrency:
-      group: release-notes-${{ github.ref_name }}
+      group: release-notes-${{ inputs.version || github.ref_name }}
       cancel-in-progress: false
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
       pull-requests: write
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Require main for manual releases
+        if: github.event_name == 'workflow_dispatch'
+        run: test "$GITHUB_REF" = refs/heads/main
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -35,10 +44,16 @@ jobs:
         run: npm install --global opencode-ai@1.19.5
       - name: Generate notes and open review PR
         env:
+          RELEASE_TAG: ${{ inputs.version || github.ref_name }}
           GH_TOKEN: ${{ github.token }}
           OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
           OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
-        run: python3 scripts/release_notes_pr.py open --tag "$GITHUB_REF_NAME"
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            python3 scripts/release_notes_pr.py start --tag "$RELEASE_TAG"
+          else
+            python3 scripts/release_notes_pr.py open --tag "$RELEASE_TAG"
+          fi
 
   approved-notes:
     if: >-
