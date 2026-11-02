@@ -9,6 +9,9 @@ import subprocess
 import tempfile
 import threading
 import uuid
+import xml.etree.ElementTree as ET
+
+from release import add_release_summary
 
 root = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -56,6 +59,10 @@ print(key.publicKey.rawRepresentation.base64EncodedString())
 <sparkle:version>1.0.1</sparkle:version><sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
 <enclosure url="{origin}/update.zip" {attributes} type="application/octet-stream"/>
 </item></channel></rss>''')
+    tree = ET.parse(feed)
+    add_release_summary(tree.find('./channel/item'), 'v1.0.1',
+                        '## 新特性\n- 更新摘要测试：支持 **Markdown**、中文 & 特殊字符 < >。\n')
+    tree.write(feed, encoding='utf-8', xml_declaration=True)
     run(args.sdk.resolve() / 'bin/sign_update', '--ed-key-file', key, feed, capture_output=True)
     key.unlink()
     app = work / 'UpdaterSmoke.app'
@@ -99,6 +106,21 @@ static bool hasVisibleWindow(void) {
     for (NSWindow *window in NSApp.windows) if (window.visible) return true;
     return false;
 }
+static bool hasReleaseNotes(NSView *view) {
+    if ([view isKindOfClass:NSTextView.class]) {
+        NSString *text = [(NSTextView *)view string];
+        if ([text containsString:@"更新摘要测试"] && [text containsString:@"Markdown"] &&
+            [text containsString:@"中文 & 特殊字符 < >"] && ![text containsString:@"**Markdown**"] &&
+            ![text containsString:@"## 新特性"]) return true;
+    }
+    for (NSView *child in view.subviews) if (hasReleaseNotes(child)) return true;
+    return false;
+}
+static bool visibleReleaseNotes(void) {
+    for (NSWindow *window in NSApp.windows)
+        if (window.visible && hasReleaseNotes(window.contentView)) return true;
+    return false;
+}
 int main(int argc, const char **argv) {
     @autoreleasepool {
         [NSApplication sharedApplication];
@@ -137,6 +159,9 @@ int main(int argc, const char **argv) {
             deadline = [NSDate dateWithTimeIntervalSinceNow:5];
             while (!hasVisibleWindow() && deadline.timeIntervalSinceNow > 0) pump(0.05);
             assert(hasVisibleWindow());
+            deadline = [NSDate dateWithTimeIntervalSinceNow:5];
+            while (!visibleReleaseNotes() && deadline.timeIntervalSinceNow > 0) pump(0.05);
+            assert(visibleReleaseNotes()); // Actual Sparkle rendered text, not just feed parsing.
             for (NSWindow *window in NSApp.windows) if (window.visible) [window performClose:nil];
             deadline = [NSDate dateWithTimeIntervalSinceNow:5];
             while (!clearedVersion && deadline.timeIntervalSinceNow > 0) pump(0.05);
@@ -170,14 +195,14 @@ int main(int argc, const char **argv) {
         assert '/appcast.xml' in requests, 'Manual check did not request the signed feed'
         assert '/update.zip' not in requests, 'Manual check unexpectedly downloaded an update'
         requests.clear()
-        print('PASS: manual checking still shows Sparkle with automatic checks disabled; dismissal clears reminder')
+        print('PASS: manual checking shows rendered Markdown in Sparkle with automatic checks disabled; dismissal clears reminder')
         run(binary, '0', '1')
         run(binary, '1', '1')
         print('PASS: production updater starts; automatic-check setting survives two relaunches')
         run(binary, 'gentle', timeout=40)
         assert '/appcast.xml' in requests, 'Automatic discovery did not request the signed feed'
         assert '/update.zip' not in requests, 'Reminder test unexpectedly downloaded an update'
-        print('PASS: signed automatic discovery stays silent; manual action shows Sparkle; dismissal clears reminder')
+        print('PASS: signed automatic discovery stays silent; manual action shows rendered Markdown in Sparkle; dismissal clears reminder')
     finally:
         run(binary, 'cleanup')
         server.shutdown()

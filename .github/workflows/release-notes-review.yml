@@ -1,0 +1,43 @@
+name: Review release notes
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: release-notes-review-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: >-
+      github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/release-notes ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Never execute code from the PR; commands and author permissions are checked in Python.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned OpenCode CLI for revisions
+        if: startsWith(github.event.comment.body, '/release-notes revise ')
+        continue-on-error: true
+        timeout-minutes: 3
+        run: npm install --global opencode-ai@1.19.5
+      - name: Process maintainer command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCODE_GO_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+          OPENCODE_MODEL: ${{ vars.OPENCODE_MODEL }}
+        run: python3 scripts/release_notes_pr.py comment

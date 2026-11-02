@@ -90,6 +90,7 @@ These are explicit versions, not `patch`/`minor`/`major` trigger tags. Choose a
 stable version greater than the latest published release.
 
 1. Review and merge the app, release scripts, and workflow changes into `main`.
+   Release summaries are generated and reviewed through a PR on GitHub; no local notes preparation is required.
    Uncommitted local changes are never included in a tag. Run relevant tests;
    scan the exact outgoing Git history before each push.
 2. On the intended main commit, create the version tag. For example, for the
@@ -104,8 +105,9 @@ stable version greater than the latest published release.
    ```
 
 3. Open GitHub Actions → **Release macOS app**. No manual GitHub Release creation
-   is needed. A version-tag push triggers the workflow; ordinary branch pushes
-   do not. Git tags have no owning branch, so the workflow explicitly rejects a
+   is needed. A version-tag push opens a release-notes PR; it does not publish
+   immediately. Review it using the commands below and merge it to start the
+   build. Ordinary branch pushes do not trigger a release. Git tags have no owning branch, so the workflow explicitly rejects a
    tag whose commit is not reachable from `origin/main`. A historical commit
    already merged into main remains valid if main advanced after tagging.
 
@@ -127,17 +129,136 @@ only after both uploads succeed. Failed uploads leave a resumable draft.
 Already published releases are not overwritten, and equal/older versions cannot
 replace Latest. Release jobs are serialized.
 
-## Automatic release notes
+## Release-note PR review with OpenCode Go
 
-Each GitHub Release body is generated from Git history and saved locally as
-`dist/release-notes.md` during publication. It includes:
+Everything happens on GitHub: a tag push creates a release-note PR, maintainer
+comments request revisions or approve the current draft, and a manual merge
+starts packaging and publication. No local OpenCode, notes preparation, or build
+is required. The OpenCode GitHub App / issue-comment bot is not required either;
+the repository's own Actions workflows run the pinned CLI.
+
+### One-time account and repository setup
+
+1. Sign in to [OpenCode Console](https://opencode.ai/console) and activate Go in
+   the workspace you intend to use.
+2. Open **Account → Personal API keys → Add API key**. Select that Go workspace,
+   name the key `codex-reset-release`, and copy it when created (shown only once).
+   If permissions are offered, choose **Restricted → Models → Request**.
+   Read-only keys cannot call models. Use a personal key tied to Go membership;
+   service-account billing is separate and may not use that subscription.
+3. In GitHub repository **Settings → Secrets and variables → Actions → Secrets**,
+   add `OPENCODE_GO_API_KEY`. Never put its value in YAML, source files, or chat.
+4. In **Variables**, add `OPENCODE_MODEL`, e.g. `opencode-go/minimax-m3`.
+   Choose a model available to your Go workspace. `opencode models opencode-go`
+   lists model IDs; the `opencode-go/` prefix is required.
+5. Keep the existing `SPARKLE_PUBLIC_ED_KEY` variable and
+   `SPARKLE_PRIVATE_ED_KEY` secret. `GITHUB_TOKEN` is supplied by Actions;
+   no GitHub PAT or OpenCode GitHub App installation is required.
+6. In **Settings → Actions → General → Workflow permissions**, enable
+   **Allow GitHub Actions to create and approve pull requests**. Workflow YAML
+   grants only each job's necessary permissions; account/organization policy
+   must also permit PR creation. The bot does not merge PRs or submit a GitHub
+   approval review; it records your explicit comment approval.
+7. Merge these workflow changes into `main` before creating the first release
+   tag using this process. Comment workflows must exist on the default branch.
+
+References: [Go](https://opencode.ai/v2/docs/console/go/),
+[API keys](https://opencode.ai/v2/docs/console/api/#personal-api-keys),
+[CLI](https://opencode.ai/docs/cli/).
+
+### For each release
+
+1. Push a new stable `vMAJOR.MINOR.PATCH` tag pointing to a commit already on main.
+2. **Release macOS app → notes-pr** compares the previous latest published
+   release with that tag, asks OpenCode to produce the summary, and creates a
+   `release-notes/<tag>` branch and PR changing only `release-notes/<tag>.md`.
+   Read **Files changed → Rendered view** for the authoritative draft.
+3. Request a revision by posting a new PR conversation comment:
+
+   ```text
+   /release-notes revise 将第一条改为用户能理解的描述，删除内部重构内容。
+   ```
+
+   **Review release notes** updates the same PR and replies with the current
+   approval command. You can also edit the Markdown file directly in GitHub.
+   Revisions that fail keep the existing draft, so your edits are not erased.
+4. Once satisfied, copy the bot's full approval command, which includes the
+   current 40-character PR head commit SHA:
+
+   ```text
+   /release-notes approve <full-head-sha>
+   ```
+
+   Only repository writers/maintainers/admins can invoke commands. The SHA
+   prevents a queued workflow from approving a different draft than you saw.
+   If you edited manually, use the latest PR commit SHA from the Commits tab.
+   Any subsequent commit or revision request requires fresh approval. Post a
+   new comment for each command; editing an old comment does not run the bot.
+5. Wait for the bot's **Approved release notes at ...** acknowledgement, then
+   merge the PR yourself through GitHub. The bot never merges it for you.
+6. The merge triggers **Release macOS app → approved-notes → release**. It
+   verifies the original tag has not moved, only the notes file changed, the
+   current draft was approved, and merged notes equal the reviewed draft.
+   Then the macOS runner tests, packages, signs and publishes automatically.
+
+The app is built from the **original tag commit**, not the PR merge commit or
+current main. Notes come from the approved merged PR via the `release-summary`
+artifact, retained 30 days. Other main changes during review cannot silently
+enter the tagged release. The published GitHub Release contains this same
+summary plus complete commit history; Sparkle embeds it before signing.
+
+Merging without the matching approval stops publication (it does not disable
+GitHub's merge button). Follow the acknowledgement-before-merge sequence.
+Do not merge through another workflow's `GITHUB_TOKEN`, since that merge may not
+trigger the publication workflow; merge as a user. Closing without merging does
+not publish. Retry failed builds with **Re-run failed jobs**. Re-running tag
+creation reuses an existing PR and never overwrites edits.
+
+Release one version at a time: if another version becomes latest during review,
+publication stops rather than publishing notes based on an outdated comparison.
+Create a newer tag/PR against the new latest; do not move an existing tag.
+
+### AI input, fallback and isolation
+
+OpenCode receives commit messages and actual code/test differences between the
+previous published tag and target tag. On first release, it compares the target
+tree against an empty tree. Lockfile and release-note files are excluded. The
+prompt groups user-visible changes under `## 新特性`, `## Bugfix`, and `## 优化`,
+omits empty sections, and prohibits unsupported claims. Markdown structure and
+placeholders are validated; your PR review confirms factual accuracy.
+
+Missing credentials/model, CLI installation failure, provider errors, a
+180-second generation timeout, invalid output, or comparison size above 300 KB
+produce the initial fallback **Fixed some known issues.** The fallback still
+requires your approval and merge. A failed revision retains the existing draft
+and revokes any previous approval; no silently truncated diff is summarized.
+
+The agent runs in a temporary directory with tools denied and comparison text
+as input. Its process receives neither GitHub credentials nor signing keys,
+and cannot modify the checkout. The workflow script alone commits the notes
+file using the GitHub API. Repository differences go to your selected Go model.
+Signing keys are available only to the separate macOS signing step.
+
+### Optional local asset preparation
+
+Outside CI, `release-notes/<tag>.md` and `TEMPLATE.md` remain available for manual
+asset preparation. `RELEASE_SUMMARY_FILE` overrides this with a generated artifact.
+Local preparation does not call an AI service. If notes change after signing,
+prepare/sign the feed again. Editing the GitHub Release body alone does not
+change notes already embedded in its appcast.
+
+## GitHub Release and complete commit history
+
+Each GitHub Release body starts with the same approved summary, followed by
+an automatically generated history saved to `dist/release-notes.md` during
+publication. The history includes:
 
 - The release tag's full commit ID and a commit link.
 - A comparison link to the previous latest published release.
 - Every commit in `previous_release..current_tag`, including merged commits.
 - Each commit's subject (the first line of its commit message) and full linked ID.
 
-This is an exact commit summary, not an AI-generated paraphrase. Commit subjects
+The history is an exact commit summary, not an AI-generated paraphrase. Commit subjects
 are escaped so they cannot inject Markdown/HTML or mention users. The first
 published release, when no previous release exists, lists all reachable commits.
 An existing previous release must be an ancestor of the new tag; divergent
@@ -177,7 +298,8 @@ python3 scripts/test-updater.py --sdk build/sparkle/sdk
 It uses a temporary bundle and isolated preference domain; it checks controller
 startup, automatic-check settings across relaunches, and the real signed-feed
 reminder flow: scheduled discovery stays silent, an explicit action opens the
-Sparkle window, and dismissal clears the pending version. It does not
+Sparkle window with rendered Markdown (including Chinese and XML special
+characters), and dismissal clears the pending version. It does not
 replace the browser/Gatekeeper A -> B distribution test.
 
 ## Installation and Gatekeeper
