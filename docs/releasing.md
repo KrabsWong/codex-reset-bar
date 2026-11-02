@@ -82,64 +82,32 @@ on latest main. It calculates the next version, automatically merges a validated
 version-only PR, creates the formal `vX.Y.Z` tag, and opens a release-notes PR
 for human approval and merge. Follow [For each release](#for-each-release).
 
-### Compatibility: explicit version tags
+The two tag forms have different roles:
 
-Pushing an explicit `vX.Y.Z` tag remains supported, but skips the automatic
-version PR and does not write the version back to main. The build synchronizes
-its own checkout to the supplied tag version:
-
-| Change | Example from 0.1.5 | Tag |
+| Tag | Created by | Role |
 | --- | --- | --- |
-| Patch | 0.1.6 | `v0.1.6` |
-| Minor | 0.2.0 | `v0.2.0` |
-| Major | 1.0.0 | `v1.0.0` |
+| `release/patch/<unique-id>`, `release/minor/<unique-id>`, `release/major/<unique-id>` | Maintainer | Requests a release and selects the version increment. |
+| `vX.Y.Z` | Release workflow | Records the exact source commit for the calculated version. |
 
-For this compatibility path, choose an explicit stable version greater than
-the latest published release.
+Do not create the formal version tag yourself. Pushing `vX.Y.Z` does not start
+release preparation. Existing formal tags remain available for downloads,
+source history, and release comparisons; do not move or delete published tags.
+Ordinary branch pushes and ordinary code PR merges do not publish the app.
 
-1. Review and merge the app, release scripts, and workflow changes into `main`.
-   Release summaries are generated and reviewed through a PR on GitHub; no local notes preparation is required.
-   Uncommitted local changes are never included in a tag. Run relevant tests;
-   scan the exact outgoing Git history before each push.
-2. On the intended main commit, create the version tag. For example, for the
-   first updater-enabled 0.1.5 release:
+After the release-note PR is approved and merged, the build validates the formal
+tag and its main ancestry, synchronizes the build checkout to that version,
+runs tests, packages the app, verifies updater preferences, and signs the ZIP
+and appcast. It builds the tagged source, not newer changes on main.
 
-   ```sh
-   git switch main
-   git pull --ff-only origin main
-   git tag -a v0.1.5 -m "Release v0.1.5 with automatic updates"
-   # After scanning the exact outgoing tag history:
-   git push origin v0.1.5
-   ```
-
-3. Open GitHub Actions → **Release macOS app**. No manual GitHub Release creation
-   is needed. A version-tag push opens a release-notes PR; it does not publish
-   immediately. Review it using the commands below and merge it to start the
-   build. Ordinary branch pushes do not trigger a release. Git tags have no owning branch, so the workflow explicitly rejects a
-   tag whose commit is not reachable from `origin/main`. A historical commit
-   already merged into main remains valid if main advanced after tagging.
-
-The workflow fetches full history and tags, verifies tag/checkout/main ancestry,
-and synchronizes `Cargo.toml` and `Cargo.lock` in the disposable CI checkout.
-`cargo update --workspace` retains existing locked dependency versions. The
-Rust `CARGO_PKG_VERSION`, packaged `CFBundleShortVersionString`/`CFBundleVersion`,
-ZIP filename, and appcast version all derive from that version. It does not
-create a version-bump commit, modify main, or move the release tag. Local source
-builds continue to report the checked-in development version.
-
-Next it runs tests, builds the app ad-hoc, exercises updater preference
-persistence, checks arm64/signatures, and signs the ZIP and appcast. Only stable
-`vMAJOR.MINOR.PATCH` tags are accepted. The first updater-enabled release must
-still be installed manually by users of older versions without Sparkle.
-
-Publishing creates a draft, uploads the ZIP and appcast, and marks it Latest
+Publication creates a draft, uploads the ZIP and appcast, and marks it Latest
 only after both uploads succeed. Failed uploads leave a resumable draft.
 Already published releases are not overwritten, and equal/older versions cannot
 replace Latest. Release jobs are serialized.
 
 ## Release-note PR review with OpenCode Go
 
-Everything happens on GitHub: a tag push creates a release-note PR, maintainer
+After a release-request tag is pushed, preparation happens on GitHub: the
+workflow updates the version and creates a release-note PR, maintainer
 comments request revisions or approve the current draft, and a manual merge
 starts packaging and publication. No local OpenCode, notes preparation, or build
 is required. Revisions use the official OpenCode GitHub bot (`opencode github run`)
@@ -231,9 +199,8 @@ References: [Go](https://opencode.ai/v2/docs/console/go/),
    A failure before the version PR is created can leave a preparation branch;
    inspect and remove that unused branch before retrying.
 
-   Explicit tag pushes remain a compatibility path and generate notes directly;
-   use a release-request tag or the Actions level selector for automatic version
-   updates to main.
+   A manually pushed `vX.Y.Z` tag does not trigger this workflow. Use a
+   release-request tag or the Actions level selector to prepare a new version.
 2. **Release macOS app → notes-pr** compares the previous latest published
    release with that tag, asks OpenCode to produce the summary, and creates a
    `release-notes/<tag>` branch and PR changing only `release-notes/<tag>.md`.
@@ -311,8 +278,8 @@ release history. This is an exceptional manual recovery, not a level-selector
 operation. Normal retries retain the original version PR merge commit.
 Never delete/recreate tags for a distributed version.
 
-Retry failed builds with **Re-run failed jobs**. Re-running tag creation reuses an
-existing open PR and never overwrites edits.
+Retry failed builds with **Re-run failed jobs**. Rerunning the original preparation run reuses an
+existing open notes PR and never overwrites edits.
 
 Release one version at a time: if another version becomes latest during review,
 publication stops rather than publishing notes based on an outdated comparison.

@@ -10,7 +10,7 @@ on:
         default: patch
         options: [patch, minor, major]
   push:
-    tags: ['v[0-9]*.[0-9]*.[0-9]*', 'release/patch/*', 'release/minor/*', 'release/major/*']
+    tags: ['release/patch/*', 'release/minor/*', 'release/major/*']
   pull_request:
     types: [closed]
     branches: [main]
@@ -57,10 +57,11 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             python3 scripts/start_version_release.py --level "$RELEASE_LEVEL"
-          elif [[ "$RELEASE_TAG" == release/* ]]; then
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [[ "$RELEASE_TAG" == release/* ]]; then
             python3 scripts/start_version_release.py --request-tag "$RELEASE_TAG"
           else
-            python3 scripts/release_notes_pr.py open --tag "$RELEASE_TAG"
+            echo "Use a release/patch, release/minor, or release/major request tag." >&2
+            exit 1
           fi
 
   approved-notes:
