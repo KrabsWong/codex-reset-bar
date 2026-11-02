@@ -103,13 +103,14 @@ jobs:
       SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
       RELEASE_TAG: ${{ needs.approved-notes.outputs.tag }}
       RELEASE_PREVIOUS_TAG: ${{ needs.approved-notes.outputs.previous }}
-      RELEASE_SUMMARY_FILE: ${{ runner.temp }}/release-summary/summary.md
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.approved-notes.outputs.commit }}
           persist-credentials: false
           fetch-depth: 0
+      - name: Configure release summary path
+        run: echo "RELEASE_SUMMARY_FILE=$RUNNER_TEMP/release-summary/summary.md" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v4
         with:
           name: release-summary
