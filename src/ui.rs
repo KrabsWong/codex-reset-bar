@@ -285,8 +285,11 @@ pub fn App() -> impl IntoElement {
         .flex_col()
         .w_full()
         .h_full()
-        .bg(move || theme().background)
-        .text_color(move || theme().foreground)
+        .bg(|| AdaptiveColor {
+            light: theme().background.light,
+            dark: rgb(0x191c21).into(),
+        })
+        .text_color(move || panel_foreground())
         .child(header(state))
         .child(
             view()
@@ -321,7 +324,10 @@ fn header(state: State) -> impl IntoElement {
     view()
         .flex_row()
         .items_center()
-        .bg(move || tint(blue(), 0.07, 0.14))
+        .bg(|| AdaptiveColor {
+            light: tint(blue(), 0.07, 0.14).light,
+            dark: rgb(0x20242b).into(),
+        })
         .gap(px(8.0))
         .px(px(PAD))
         .pt(px(TOP))
@@ -375,7 +381,7 @@ fn header(state: State) -> impl IntoElement {
                 .child(
                     text(move || subtitle(state))
                         .text_size(px(11.0))
-                        .text_color(move || theme().muted_foreground),
+                        .text_color(move || panel_muted_foreground()),
                 ),
         )
         .child(
@@ -449,7 +455,7 @@ fn status_area(state: State) -> impl IntoElement {
 fn service_description() -> impl IntoElement {
     text(move || tr("We watch ", "我们关注 "))
         .text_size(px(11.0))
-        .text_color(move || theme().muted_foreground)
+        .text_color(move || panel_muted_foreground())
         .child(
             text("@thsottiaux")
                 .text_color(blue)
@@ -502,7 +508,7 @@ fn skeleton_block(state: State, width: f32, height: f32) -> impl IntoElement {
         .w(px(width))
         .h(px(height))
         .rounded(px(height / 2.0))
-        .bg(move || tint(theme().muted_foreground, 0.2, 0.3))
+        .bg(move || tint(panel_muted_foreground(), 0.2, 0.3))
         .opacity(move || state.pulse.get())
         .transition_opacity()
 }
@@ -523,7 +529,7 @@ fn failure_view() -> impl IntoElement {
         .child(
             text(move || tr("Check your connection, then click refresh at the top.", "请检查网络连接，再点击顶部刷新。"))
                 .text_size(px(11.0))
-                .text_color(move || theme().muted_foreground)
+                .text_color(move || panel_muted_foreground())
                 .number_of_lines(2),
         )
 }
@@ -560,7 +566,7 @@ fn latest_card(state: State) -> impl IntoElement {
                 .child(
                     text(move || tr("Latest reset", "最近一次重置"))
                         .text_size(px(14.0))
-                        .text_color(move || theme().foreground)
+                        .text_color(move || panel_foreground())
                         .font_weight(FontWeight::MEDIUM),
                 )
                 .child(view().flex_1())
@@ -573,7 +579,7 @@ fn latest_card(state: State) -> impl IntoElement {
                     })
                     .text_size(px(14.0))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(move || theme().foreground),
+                    .text_color(move || panel_foreground()),
                 ),
         )
         .child(
@@ -584,7 +590,7 @@ fn latest_card(state: State) -> impl IntoElement {
                     .unwrap_or_default()
             })
             .text_size(px(12.0))
-            .text_color(move || theme().muted_foreground),
+            .text_color(move || panel_muted_foreground()),
         )
         .child(view().pt(px(8.0)).child(separator()))
 }
@@ -707,7 +713,7 @@ fn watch_row(state: State) -> impl IntoElement {
                             .unwrap_or_default()
                     })
                     .text_size(px(11.0))
-                    .text_color(move || theme().muted_foreground),
+                    .text_color(move || panel_muted_foreground()),
                 )
         },
     )
@@ -726,7 +732,7 @@ fn stats_row(state: State) -> impl IntoElement {
                 .child(
                     text(move || tr("Total resets", "重置总次数"))
                         .text_size(px(11.0))
-                        .text_color(move || theme().muted_foreground),
+                        .text_color(move || panel_muted_foreground()),
                 )
                 .child(
                     text(move || {
@@ -749,7 +755,7 @@ fn stats_row(state: State) -> impl IntoElement {
                 .child(
                     text(move || tr("Avg. interval", "平均间隔"))
                         .text_size(px(11.0))
-                        .text_color(move || theme().muted_foreground),
+                        .text_color(move || panel_muted_foreground()),
                 )
                 .child(
                     text(move || {
@@ -773,7 +779,7 @@ fn stats_row(state: State) -> impl IntoElement {
                 .child(
                     text(move || tr("Longest wait", "最长等待"))
                         .text_size(px(11.0))
-                        .text_color(move || theme().muted_foreground),
+                        .text_color(move || panel_muted_foreground()),
                 )
                 .child(
                     text(move || {
@@ -815,7 +821,7 @@ fn reset_color(banked: bool) -> AdaptiveColor {
 fn no_reset_color() -> AdaptiveColor {
     AdaptiveColor {
         light: rgb(0xe5eaf1).into(),
-        dark: rgb(0x303845).into(),
+        dark: rgb(0x303741).into(),
     }
 }
 
@@ -853,7 +859,7 @@ fn reset_calendar(state: State) -> impl IntoElement {
                 .child(
                     text(move || tr("20 weeks · Local time", "20 周 · 本地时间"))
                         .text_size(px(10.0))
-                        .text_color(move || theme().muted_foreground),
+                        .text_color(move || panel_muted_foreground()),
                 ),
         )
         .child(
@@ -865,7 +871,7 @@ fn reset_calendar(state: State) -> impl IntoElement {
                         text(move || tr(en, zh))
                             .text_size(px(9.0))
                             .h(px(12.0))
-                            .text_color(move || theme().muted_foreground)
+                            .text_color(move || panel_muted_foreground())
                     }),
                 ))
                 .children((0..calendar::WEEKS).map(move |week| {
@@ -928,26 +934,26 @@ fn reset_calendar(state: State) -> impl IntoElement {
                         )
                     })
                     .text_size(px(9.0))
-                    .text_color(move || theme().muted_foreground),
+                    .text_color(move || panel_muted_foreground()),
                 )
                 .child(view().flex_1())
                 .child(view().size(px(7.0)).rounded(px(2.0)).bg(blue()))
                 .child(
                     text(move || tr("regular", "常规"))
                         .text_size(px(9.0))
-                        .text_color(move || theme().muted_foreground),
+                        .text_color(move || panel_muted_foreground()),
                 )
                 .child(view().size(px(7.0)).rounded(px(2.0)).bg(reset_color(true)))
                 .child(
                     text(move || tr("banked", "储备"))
                         .text_size(px(9.0))
-                        .text_color(move || theme().muted_foreground),
+                        .text_color(move || panel_muted_foreground()),
                 )
                 .child(view().size(px(7.0)).rounded(px(2.0)).bg(no_reset_color))
                 .child(
                     text(move || tr("No resets", "无重置"))
                         .text_size(px(9.0))
-                        .text_color(move || theme().muted_foreground),
+                        .text_color(move || panel_muted_foreground()),
                 ),
         )
 }
@@ -980,7 +986,7 @@ fn history_section(state: State) -> impl IntoElement {
         .overflow_hidden()
         .bg(|| AdaptiveColor {
             light: rgb(0xf2f5fa).into(),
-            dark: rgb(0x151c28).into(),
+            dark: rgb(0x20242b).into(),
         })
         .child(separator())
         .child(
@@ -992,7 +998,10 @@ fn history_section(state: State) -> impl IntoElement {
                 .child(
                     text(move || tr("Recent resets", "近期重置"))
                         .text_size(px(11.0))
-                        .text_color(blue)
+                        .text_color(|| AdaptiveColor {
+                            light: blue().light,
+                            dark: panel_foreground().dark,
+                        })
                         .font_weight(FontWeight::SEMIBOLD),
                 )
                 .child(view().flex_1())
@@ -1014,7 +1023,7 @@ fn history_section(state: State) -> impl IntoElement {
                         move || {
                             text(move || tr("No reset records yet", "暂无重置记录"))
                                 .text_size(px(12.0))
-                                .text_color(move || theme().muted_foreground)
+                                .text_color(move || panel_muted_foreground())
                                 .p(px(8.0))
                         },
                     )),
@@ -1061,7 +1070,10 @@ fn history_row(state: State, row: ReadSignal<Reset>, index: ReadSignal<usize>) -
         .py(px(7.0))
         .gap(px(4.0))
         .border_t(move || px(if index.get() == 0 { 0.0 } else { 1.0 }))
-        .border_color(move || tint(blue(), 0.12, 0.18))
+        .border_color(|| AdaptiveColor {
+            light: tint(blue(), 0.12, 0.18).light,
+            dark: panel_border().dark,
+        })
         .hover(move |style| {
             style.bg(move || if unread_record(state, &row.get()) { tint(unread_foreground(), 0.2, 0.25) } else { AdaptiveColor {
                 light: rgb(0xe2ebff).into(),
@@ -1087,7 +1099,7 @@ fn history_row(state: State, row: ReadSignal<Reset>, index: ReadSignal<usize>) -
                             .unwrap_or_default()
                     })
                     .text_size(px(11.0))
-                    .text_color(move || if unread_record(state, &row.get()) { unread_foreground() } else { theme().muted_foreground }),
+                    .text_color(move || if unread_record(state, &row.get()) { unread_foreground() } else { panel_muted_foreground() }),
                 )
                 .child(view().flex_1())
                 .child(
@@ -1102,7 +1114,7 @@ fn history_row(state: State, row: ReadSignal<Reset>, index: ReadSignal<usize>) -
                         }
                     })
                     .text_size(px(10.0))
-                    .text_color(move || if unread_record(state, &row.get()) { unread_foreground() } else { theme().muted_foreground }),
+                    .text_color(move || if unread_record(state, &row.get()) { unread_foreground() } else { panel_muted_foreground() }),
                 ),
         )
         .child(
@@ -1125,7 +1137,7 @@ fn history_row(state: State, row: ReadSignal<Reset>, index: ReadSignal<usize>) -
                 .child(
                     text(move || row.get().text.trim().to_owned())
                     .text_size(px(12.0))
-                    .text_color(move || if unread_record(state, &row.get()) { unread_foreground() } else { theme().foreground })
+                    .text_color(move || if unread_record(state, &row.get()) { unread_foreground() } else { panel_foreground() })
                     .number_of_lines(3),
                 ),
         )
@@ -1148,7 +1160,7 @@ fn attribution_footer() -> impl IntoElement {
                 .child(
                     text(move || tr("Data from", "数据来源"))
                         .text_size(px(10.0))
-                        .text_color(move || theme().muted_foreground),
+                        .text_color(move || panel_muted_foreground()),
                 )
                 .child(
                     button()
@@ -1160,8 +1172,29 @@ fn attribution_footer() -> impl IntoElement {
         )
 }
 
+fn panel_foreground() -> AdaptiveColor {
+    AdaptiveColor {
+        light: theme().foreground.light,
+        dark: rgb(0xf0f1f3).into(),
+    }
+}
+
+fn panel_muted_foreground() -> AdaptiveColor {
+    AdaptiveColor {
+        light: theme().muted_foreground.light,
+        dark: rgb(0xa3a8b0).into(),
+    }
+}
+
+fn panel_border() -> AdaptiveColor {
+    AdaptiveColor {
+        light: theme().border.light,
+        dark: rgb(0x30353d).into(),
+    }
+}
+
 fn separator() -> impl IntoElement {
-    view().h(px(1.0)).w_full().bg(move || theme().border)
+    view().h(px(1.0)).w_full().bg(panel_border)
 }
 
 /// `CODEX_RESET_TRACE=1` writes what the panel does to
