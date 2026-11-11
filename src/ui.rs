@@ -666,54 +666,60 @@ fn announced_next(state: State) -> impl IntoElement {
 }
 
 fn watch_row(state: State) -> impl IntoElement {
+    let active_watch = move || {
+        state.status.get().and_then(|data| data.active_watch)
+            .filter(|watch| watch.expires_after(state.now.get()).is_some())
+    };
     when(
-        move || {
-            state
-                .status
-                .get()
-                .and_then(|data| data.active_watch)
-                .is_some()
-        },
+        move || active_watch().is_some(),
         move || {
             view()
-                .flex_row()
-                .items_center()
-                .gap_2()
+                .flex_col()
+                .gap(px(5.0))
                 .px(px(11.0))
-                .py(px(7.0))
+                .py(px(9.0))
                 .rounded(px(8.0))
                 .bg(move || tint(warning(), 0.12, 0.18))
                 .border(px(1.0))
-                .border_color(move || tint(warning(), 0.35, 0.4))
+                .border_color(move || tint(warning(), 0.18, 0.25))
                 .child(
-                    text(move || {
-                        state
-                            .status
-                            .get()
-                            .and_then(|data| data.active_watch)
-                            .map(|watch| match watch.reset_chance_percent {
-                                Some(chance) => format!("{} · {chance}% {}", tr("Watch window", "观察窗口"), tr("chance", "概率")),
-                                None => format!("{} · {}", tr("Watch window", "观察窗口"), watch.level),
-                            })
-                            .unwrap_or_default()
-                    })
-                    .text_size(px(11.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(warning),
+                    view().flex_row().items_center().gap_2()
+                        .child(text(move || {
+                            active_watch()
+                                .and_then(|watch| watch.expires_after(state.now.get()))
+                                .map(|at| format::watch_forecast(at, state.now.get()))
+                                .unwrap_or_default()
+                        })
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(warning))
+                        .child(view().flex_1())
+                        .child(text(move || tr("Unconfirmed", "未确认"))
+                            .text_size(px(10.0))
+                            .text_color(move || panel_muted_foreground())),
                 )
-                .child(view().flex_1())
+                .child(text(move || {
+                    active_watch()
+                        .and_then(|watch| watch.expires_after(state.now.get()))
+                        .map(|at| format!("{} {} · {}", tr("Forecast through", "预测截至"),
+                            format::absolute(at), tr("Local time", "本地时间")))
+                        .unwrap_or_default()
+                })
+                .text_size(px(10.0))
+                .text_color(move || panel_muted_foreground()))
                 .child(
-                    text(move || {
-                        state
-                            .status
-                            .get()
-                            .and_then(|data| data.active_watch)
-                            .and_then(|watch| format::parse(&watch.expires_at))
-                            .map(|at| format::relative(at, state.now.get()))
-                            .unwrap_or_default()
-                    })
-                    .text_size(px(11.0))
-                    .text_color(move || panel_muted_foreground()),
+                    button()
+                        .accessibility_label(move || Some(tr("View forecast source", "查看预测依据").into()))
+                        .hover(|style| style.opacity(0.75))
+                        .on_press(move || {
+                            let url = active_watch()
+                                .and_then(|watch| watch.source)
+                                .and_then(|source| source.url)
+                                .unwrap_or_else(|| api::SITE.to_owned());
+                            open(&url);
+                        })
+                        .child(text(move || tr("View source ↗", "查看依据 ↗"))
+                            .text_size(px(10.0)).text_color(blue)),
                 )
         },
     )

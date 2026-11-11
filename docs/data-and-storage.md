@@ -9,6 +9,8 @@ The app reads the service's public endpoints:
 
 **Longest wait** is calculated from the complete history as the largest interval between consecutive reset timestamps. Partial history or invalid dates do not produce a misleading all-time value. Calendar dates use the Mac's local time zone.
 
+Active reset forecasts show an approximate remaining window (rounded up), the local deadline, and an unconfirmed label. The deadline comes from `active_watch.expires_at`, matching the service website; probabilities are not displayed. “View source” opens the watch’s source URL, falling back to the service website for older cached data without a source. Expired or invalid deadlines hide the forecast.
+
 Files are stored in `~/Library/Application Support/CodexResets/`:
 
 - `cache.json`: previously fetched statistics and history, displayed while fresh data loads.

@@ -81,6 +81,24 @@ fn relative_in(timestamp: i64, now: i64, language: Language) -> String {
     }
 }
 
+/// Round a forecast horizon up, so a partial day never appears as a shorter window.
+pub fn watch_forecast(target: i64, now: i64) -> String {
+    watch_forecast_in(target, now, i18n::language())
+}
+
+fn watch_forecast_in(target: i64, now: i64, language: Language) -> String {
+    let seconds = (target - now).max(1);
+    let (value, english, chinese) = if seconds < 86400 {
+        ((seconds + 3599) / 3600, "hour", "小时")
+    } else {
+        ((seconds + 86399) / 86400, "day", "天")
+    };
+    match language {
+        Language::English => format!("Possible reset within {value} {english}{}", if value == 1 { "" } else { "s" }),
+        Language::SimplifiedChinese => format!("未来约 {value} {chinese}内可能重置"),
+    }
+}
+
 /// A compact countdown, without implying a scheduled reset has occurred.
 pub fn countdown(target: i64, now: i64) -> String {
     countdown_in(target, now, i18n::language())
@@ -119,6 +137,15 @@ pub fn number(value: f64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn forecast_rounds_up_partial_days_and_hours() {
+        use super::*;
+        assert_eq!(watch_forecast_in(86401, 0, Language::English), "Possible reset within 2 days");
+        assert_eq!(watch_forecast_in(3601, 0, Language::English), "Possible reset within 2 hours");
+        assert_eq!(watch_forecast_in(3600, 0, Language::English), "Possible reset within 1 hour");
+        assert_eq!(watch_forecast_in(86401, 0, Language::SimplifiedChinese), "未来约 2 天内可能重置");
+    }
+
     use super::*;
     #[test]
     fn chinese_relative_times_and_countdown() {

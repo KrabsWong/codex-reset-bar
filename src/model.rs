@@ -75,6 +75,14 @@ pub struct Watch {
     pub expires_at: String,
     #[serde(default)]
     pub text: Option<String>,
+    #[serde(default)]
+    pub source: Option<ResetSource>,
+}
+
+impl Watch {
+    pub fn expires_after(&self, now: i64) -> Option<i64> {
+        crate::format::parse(&self.expires_at).filter(|at| *at > now)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -148,6 +156,26 @@ pub fn longest_wait_days(resets: &[Reset], has_more: bool) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn watch_preserves_source_and_expires_at_deadline() {
+        let watch: Watch = serde_json::from_str(r#"{
+            "level":"elevated", "forecast_window":"by end of Thursday",
+            "expires_at":"2026-11-13T08:00:00Z",
+            "source":{"type":"x_post","url":"https://x.com/thsottiaux/status/2120410480204525936"}
+        }"#).unwrap();
+        let deadline = crate::format::parse(&watch.expires_at).unwrap();
+        assert_eq!(watch.expires_after(deadline - 1), Some(deadline));
+        assert_eq!(watch.expires_after(deadline), None);
+        assert_eq!(watch.expires_after(deadline + 1), None);
+        assert_eq!(watch.source.unwrap().url.as_deref(),
+            Some("https://x.com/thsottiaux/status/2120410480204525936"));
+        let cached: Watch = serde_json::from_str(r#"{
+            "level":"elevated", "expires_at":"invalid"
+        }"#).unwrap();
+        assert!(cached.source.is_none());
+        assert_eq!(cached.expires_after(deadline), None);
+    }
 
     fn reset(at: &str) -> Reset {
         Reset {
